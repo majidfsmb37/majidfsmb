@@ -4,10 +4,10 @@
       "maxDuration": 60
     },
     "api/clone.js": {
-      "maxDuration": 30
+      "maxDuration": 60
     },
     "api/voices.js": {
-      "maxDuration": 15
+      "maxDuration": 60
     }
   }
 }
