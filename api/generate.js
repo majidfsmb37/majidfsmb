@@ -78,7 +78,13 @@ module.exports = async (req, res) => {
   }
   
   try {
-    const { text, voice, apiKeys, speed = 1.0 } = req.body;
+    // Get API keys from environment variable
+const envKeys = process.env.SPEECHIFY_API_KEYS ? 
+  process.env.SPEECHIFY_API_KEYS.split(',' ).map(k => k.trim()) : [];
+
+const { text, voice, speed = 1.0 } = req.body;
+const apiKeys = envKeys;
+
     
     if (!text || !voice || !apiKeys || !Array.isArray(apiKeys) || apiKeys.length === 0) {
       return res.status(400).json({ 
