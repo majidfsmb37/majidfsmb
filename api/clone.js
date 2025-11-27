@@ -4,87 +4,98 @@ import fetch from "node-fetch";
 
 export const config = {
   api: {
-    bodyParser: false,
-    sizeLimit: "50mb", // max audio upload
+    bodyParser: false, // must disable for file uploads
+    sizeLimit: "50mb", // max upload size
   },
 };
-
-// Environment variable for Speechify API keys (comma-separated for rotation)
-const SPEECHIFY_API_KEYS = process.env.SPEECHIFY_API_KEYS
-  ? process.env.SPEECHIFY_API_KEYS.split(',').map(k => k.trim()).filter(Boolean)
-  : [];
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  if (!SPEECHIFY_API_KEYS.length) {
-    return res.status(500).json({ ok: false, error: "No API keys configured" });
-  }
-
   try {
     const form = formidable({ multiples: false });
+
+    // Parse multipart form
     const { fields, files } = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => (err ? reject(err) : resolve({ fields, files })));
+      form.parse(req, (err, fields, files) => {
+        if (err) reject(err);
+        else resolve({ fields, files });
+      });
     });
 
-    const voiceName = fields.voice_name?.trim() || `Voice_${Math.random().toString(16).slice(2, 10)}`;
-    const audioFile = files.audio;
+    // Validate input
+    const voiceName = fields.voice_name?.trim() || "Voice_" + Date.now();
+    if (!files.audio) {
+      return res.status(400).json({ ok: false, error: "No audio uploaded" });
+    }
 
-    if (!audioFile) return res.status(400).json({ ok: false, error: "No audio uploaded" });
-    if (audioFile.size > 50 * 1024 * 1024) return res.status(400).json({ ok: false, error: "File too large (max 50MB)" });
+    const file = files.audio;
+    if (file.size > 50 * 1024 * 1024) {
+      return res.status(400).json({ ok: false, error: "File too large (max 50MB)" });
+    }
 
-    const fileBuffer = fs.readFileSync(audioFile.filepath);
+    // Read file
+    const buffer = fs.readFileSync(file.filepath);
 
+    // API key
+    const apiKey = process.env.SPEECHIFY_API_KEY || "";
+    if (!apiKey) {
+      return res.status(500).json({ ok: false, error: "No API key configured" });
+    }
+
+    // Prepare form data
     const formData = new FormData();
     formData.append("name", voiceName);
     formData.append("gender", "male");
-    formData.append("consent", JSON.stringify({ fullName: "User", email: "user@example.com" }));
-    formData.append("sample", new Blob([fileBuffer]), audioFile.originalFilename);
+    formData.append("consent", JSON.stringify({
+      fullName: "VercelUser",
+      email: "user@example.com",
+    }));
+    formData.append("sample", new Blob([buffer]), file.originalFilename || "sample.mp3");
 
-    let lastError = null;
+    // Call Speechify API
+    const response = await fetch("https://api.sws.speechify.com/v1/voices", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: formData,
+    });
 
-    // Rotate API keys in case of rate limit or failure
-    for (const apiKey of SPEECHIFY_API_KEYS) {
-      try {
-        const response = await fetch("https://api.sws.speechify.com/v1/voices", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}` },
-          body: formData,
-        });
-
-        const contentType = response.headers.get("content-type") || "";
-        let data;
-        if (contentType.includes("application/json")) {
-          data = await response.json();
-        } else {
-          const text = await response.text();
-          console.error("Non-JSON API response:", text);
-          lastError = `Unexpected API response: ${text}`;
-          continue;
-        }
-
-        if (response.ok && data?.id) {
-          return res.status(200).json({
-            ok: true,
-            message: `Voice '${voiceName}' cloned successfully!`,
-            voice: { id: data.id, name: data.display_name || voiceName },
-            voice_name: voiceName,
-          });
-        } else {
-          lastError = data.message || "Clone failed";
-        }
-      } catch (err) {
-        console.error("API request error:", err);
-        lastError = err.message;
-      }
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      console.error("Non-JSON API response:", text);
+      return res.status(500).json({
+        ok: false,
+        error: "Speechify API returned non-JSON response",
+        apiResponse: text,
+        httpStatus: response.status,
+      });
     }
 
-    // If all API keys failed
-    return res.status(500).json({ ok: false, error: lastError || "Voice cloning failed" });
+    if (!data.id) {
+      return res.status(response.status).json({
+        ok: false,
+        error: data.message || "Clone failed",
+        httpStatus: response.status,
+      });
+    }
+
+    // Success
+    return res.status(200).json({
+      ok: true,
+      message: `Voice '${voiceName}' cloned successfully!`,
+      voice: { id: data.id, name: data.display_name || voiceName },
+      voice_name: voiceName,
+    });
+
   } catch (err) {
-    console.error("Server error:", err);
-    return res.status(500).json({ ok: false, error: "Server error", details: err.message });
+    console.error("Clone error:", err);
+    return res.status(500).json({ ok: false, error: "Server error: " + err.message });
   }
 }
