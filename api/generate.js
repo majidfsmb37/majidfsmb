@@ -79,16 +79,21 @@ module.exports = async (req, res) => {
   
   try {
     // Get API keys from environment variable
-const envKeys = process.env.SPEECHIFY_API_KEYS ? 
-  process.env.SPEECHIFY_API_KEYS.split(',' ).map(k => k.trim()) : [];
-
-const { text, voice, speed = 1.0 } = req.body;
-const apiKeys = envKeys;
-
+    const envKeys = process.env.SPEECHIFY_API_KEYS ? 
+      process.env.SPEECHIFY_API_KEYS.split(',').map(k => k.trim()) : [];
     
-    if (!text || !voice || !apiKeys || !Array.isArray(apiKeys) || apiKeys.length === 0) {
+    const { text, voice, speed = 1.0 } = req.body;
+    const apiKeys = envKeys;
+    
+    if (!text || !voice) {
       return res.status(400).json({ 
-        error: 'Missing required fields: text, voice, apiKeys (array)' 
+        error: 'Missing required fields: text, voice' 
+      });
+    }
+    
+    if (!apiKeys || apiKeys.length === 0) {
+      return res.status(500).json({ 
+        error: 'No API keys configured. Please set SPEECHIFY_API_KEYS environment variable.' 
       });
     }
     
