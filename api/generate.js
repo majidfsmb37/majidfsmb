@@ -5,7 +5,7 @@ const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP  = "https://api.speechify.com/v1/audio/stream";
 const CHUNK_CHAR_LIMIT = 2000;
 const REQUEST_TIMEOUT = 50000;
-const MAX_PARALLEL_CHUNKS = 20;
+const MAX_PARALLEL_CHUNKS = 30; // ✅ Updated to allow up to 30 chunks (~60k chars)
 
 function makeRequest(url, options, postData) {
   return new Promise((resolve, reject) => {
@@ -74,9 +74,9 @@ function getApiKeys() {
   if (!raw) return [];
 
   return raw
-    .split(/\r?\n/)        // ✅ newline split (MAIN FIX)
-    .map(k => k.trim())    // ✅ remove spaces
-    .filter(Boolean);      // ✅ remove empty lines
+    .split(/\r?\n/)        // ✅ Split by newline
+    .map(k => k.trim())    // ✅ Remove spaces
+    .filter(Boolean);      // ✅ Remove empty lines
 }
 
 async function processChunk(chunkText, voice, speed, apiKeys, keyIndex) {
@@ -96,7 +96,7 @@ async function processChunk(chunkText, voice, speed, apiKeys, keyIndex) {
     const options = {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${apiKey}`, // ✅ clean single-line key
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload)
       }
@@ -128,7 +128,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const apiKeys = getApiKeys(); // ✅ FIXED
+    const apiKeys = getApiKeys();
     const { text, voice, speed = 1.0 } = req.body;
 
     if (!text || !voice) {
@@ -147,9 +147,13 @@ module.exports = async (req, res) => {
       });
     }
 
+    console.log(`Processing ${chunks.length} chunks in parallel...`);
+
     const audioChunks = await Promise.all(
       chunks.map((chunk, i) => processChunk(chunk, voice, speed, apiKeys, i))
     );
+
+    console.log(`All ${chunks.length} chunks completed!`);
 
     const finalAudio = Buffer.concat(
       audioChunks.map((a, i) => (i > 0 ? stripId3(a) : a))
