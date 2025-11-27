@@ -1,167 +1,116 @@
-<?php
-session_start();
-header('Content-Type: application/json; charset=utf-8');
+import fs from "fs";
+import path from "path";
+import formidable from "formidable";
 
-/**
- * Speechify Voice Cloning — compatible with dashboard.js handlers
- * - Returns JSON:
- * { ok:true, message:'...', voice:{ id, name }, voice_name: "..." }
- */
+const USERS_FILE = path.join(process.cwd(), "users.json");
+const VOICES_FILE = path.join(process.cwd(), "voices.json");
+const VOICES_DIR = path.join(process.cwd(), "voices");
 
-try {
-  // ========= CONFIG =========
-  $apiKey = "VmvqmOk0NoTKBdEmLiEI87WS-mMfvbd9Sj_Uq7OuhPM=";
-  $apiEndpoint = "https://api.sws.speechify.com/v1/voices";
-  $users_file = __DIR__ . "/users.json";
-  $voices_file = __DIR__ . "/voices.json";
-  $voices_dir = __DIR__ . "/voices";
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const API_ENDPOINT = "https://api.sws.speechify.com/v1/voices";
 
-  // ========= GUARDS =========
-  if (empty($_SESSION['username'])) {
-    http_response_code(401);
-    echo json_encode(['ok'=>false,'error'=>'Not logged in']); 
-    exit;
-  }
-  $username = $_SESSION['username'];
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
-  // Ensure files/dirs exist
-  if (!file_exists($users_file)) file_put_contents($users_file, json_encode(new stdClass(), JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
-  if (!file_exists($voices_file)) file_put_contents($voices_file, json_encode([], JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
-  if (!is_dir($voices_dir)) @mkdir($voices_dir, 0775, true);
-
-  // Load user
-  $users = json_decode(file_get_contents($users_file), true);
-  if (!is_array($users)) $users = [];
-  if (!isset($users[$username])) {
-    echo json_encode(['ok'=>false,'error'=>'User not found']); 
-    exit;
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  // Input validation
-  $voiceName = trim($_POST['voice_name'] ?? '');
-  if ($voiceName === '') $voiceName = 'Voice_' . bin2hex(random_bytes(4));
-
-  if (!isset($_FILES['audio']) || $_FILES['audio']['error'] !== UPLOAD_ERR_OK) {
-    echo json_encode(['ok'=>false,'error'=>'No audio uploaded']); 
-    exit;
-  }
-  $tmp = $_FILES['audio']['tmp_name'];
-  if (!is_uploaded_file($tmp)) {
-    echo json_encode(['ok'=>false,'error'=>'Invalid upload']); 
-    exit;
-  }
-  if ($_FILES['audio']['size'] > 50*1024*1024) {
-    echo json_encode(['ok'=>false,'error'=>'File too large (max 50MB)']); 
-    exit;
-  }
-
-  // Prepare CURL file
-  $mime = function_exists('mime_content_type') ? @mime_content_type($tmp) : 'audio/mpeg';
-  $nameOnWire = $_FILES['audio']['name'] ?: ('sample_' . time() . '.mp3');
-  $cfile = new CURLFile($tmp, $mime, $nameOnWire);
-
-  // Consent payload
-  $consent = [
-    "fullName" => $username,
-    "email" => $username . "@example.com"
-  ];
-
-  // Build POST fields
-  $postFields = [
-    "name" => $voiceName,
-    "gender" => "male",
-    "consent" => json_encode($consent),
-    "sample" => $cfile
-  ];
-
-  // ========= CURL REQUEST =========
-  $ch = curl_init($apiEndpoint);
-  curl_setopt_array($ch, [
-    CURLOPT_HTTPHEADER => ["Authorization: Bearer $apiKey"],
-    CURLOPT_POST => true,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_POSTFIELDS => $postFields,
-    CURLOPT_CONNECTTIMEOUT => 15,
-    CURLOPT_TIMEOUT => 120
-  ]);
-  $response = curl_exec($ch);
-  $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-  $curl_err = curl_error($ch);
-  curl_close($ch);
-
-  if ($response === false) {
-    echo json_encode(['ok'=>false,'error'=>'CURL error: '.$curl_err]); 
-    exit;
-  }
-
-  $data = json_decode($response, true);
-
-  // Success: 200 or 201 + valid voice ID
-  if (($http_code === 200 || $http_code === 201) && is_array($data) && !empty($data['id'])) {
-    $voice_id = $data['id'];
-    $voice_name = $data['display_name'] ?? $voiceName;
-
-    // ====== Persist to users.json ======
-    if (!isset($users[$username]['voices']) || !is_array($users[$username]['voices'])) {
-      $users[$username]['voices'] = [];
+  try {
+    const apiKey = process.env.SPEECHIFY_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ ok: false, error: "API key not configured" });
     }
-    $exists = false;
-    foreach ($users[$username]['voices'] as $v) {
-      if (!empty($v['id']) && $v['id'] === $voice_id) { 
-        $exists = true; 
-        break; 
-      }
+
+    // Parse form-data
+    const form = formidable({ multiples: false, maxFileSize: MAX_FILE_SIZE });
+    const data = await new Promise((resolve, reject) => {
+      form.parse(req, (err, fields, files) => {
+        if (err) return reject(err);
+        resolve({ fields, files });
+      });
+    });
+
+    const username = data.fields.username;
+    if (!username) return res.status(401).json({ ok: false, error: "Not logged in" });
+
+    // Ensure storage files/directories exist
+    if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify({}, null, 2));
+    if (!fs.existsSync(VOICES_FILE)) fs.writeFileSync(VOICES_FILE, JSON.stringify([], null, 2));
+    if (!fs.existsSync(VOICES_DIR)) fs.mkdirSync(VOICES_DIR, { recursive: true });
+
+    const users = JSON.parse(fs.readFileSync(USERS_FILE, "utf-8"));
+    if (!users[username]) return res.status(400).json({ ok: false, error: "User not found" });
+
+    const voiceName = data.fields.voice_name?.trim() || "Voice_" + Math.random().toString(16).slice(2, 10);
+
+    const audioFile = data.files.audio;
+    if (!audioFile || !audioFile.filepath) return res.status(400).json({ ok: false, error: "No audio uploaded" });
+    if (audioFile.size > MAX_FILE_SIZE) return res.status(400).json({ ok: false, error: "File too large (max 50MB)" });
+
+    // Prepare form data for Speechify API
+    const FormData = (await import("form-data")).default;
+    const formData = new FormData();
+    formData.append("name", voiceName);
+    formData.append("gender", "male");
+    formData.append("consent", JSON.stringify({ fullName: username, email: `${username}@example.com` }));
+    formData.append("sample", fs.createReadStream(audioFile.filepath), audioFile.originalFilename);
+
+    // Send request to Speechify API
+    const fetch = (await import("node-fetch")).default;
+    const response = await fetch(API_ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+    });
+
+    const json = await response.json();
+    if (!response.ok || !json.id) {
+      return res.status(500).json({ ok: false, error: json.message || "Clone failed", response: json });
     }
-    if (!$exists) {
-      $users[$username]['voices'][] = ["id" => $voice_id, "name" => $voice_name];
+
+    const voice_id = json.id;
+    const voice_name = json.display_name || voiceName;
+
+    // Save voice to user
+    if (!Array.isArray(users[username].voices)) users[username].voices = [];
+    if (!users[username].voices.find(v => v.id === voice_id)) {
+      users[username].voices.push({ id: voice_id, name: voice_name });
     }
 
     // Remove from removed_voices if exists
-    if (!empty($users[$username]['removed_voices']) && is_array($users[$username]['removed_voices'])) {
-      $idx = array_search($voice_id, $users[$username]['removed_voices'], true);
-      if ($idx !== false) {
-        unset($users[$username]['removed_voices'][$idx]);
-        $users[$username]['removed_voices'] = array_values($users[$username]['removed_voices']);
-      }
-    }
-    file_put_contents($users_file, json_encode($users, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE), LOCK_EX);
-
-    // ====== Optional: Global voices.json ======
-    $voices = json_decode(@file_get_contents($voices_file), true);
-    if (!is_array($voices)) $voices = [];
-    $byId = [];
-    foreach ($voices as $v) { if (isset($v['id'])) $byId[$v['id']] = true; }
-    if (empty($byId[$voice_id])) {
-      $voices[] = [
-        'id' => $voice_id,
-        'name' => $voice_name,
-        'language' => $data['language'] ?? null,
-        'created_by' => $username,
-        'created_at' => date('c')
-      ];
-      file_put_contents($voices_file, json_encode($voices, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE), LOCK_EX);
+    if (Array.isArray(users[username].removed_voices)) {
+      users[username].removed_voices = users[username].removed_voices.filter(v => v !== voice_id);
     }
 
-    // ====== FINAL JSON RESPONSE (JS ?? ???? ??????) ======
-    echo json_encode([
-      'ok' => true,
-      'message' => "Voice '{$voice_name}' cloned successfully!",
-      'voice' => ['id' => $voice_id, 'name' => $voice_name],
-      'voice_name' => $voice_name  // JS ??? ${data.voice_name} ??? ??? ??
-    ]);
-    exit;
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+
+    // Save to global voices.json
+    const voices = JSON.parse(fs.readFileSync(VOICES_FILE, "utf-8"));
+    if (!voices.find(v => v.id === voice_id)) {
+      voices.push({
+        id: voice_id,
+        name: voice_name,
+        language: json.language || null,
+        created_by: username,
+        created_at: new Date().toISOString(),
+      });
+      fs.writeFileSync(VOICES_FILE, JSON.stringify(voices, null, 2));
+    }
+
+    return res.status(200).json({
+      ok: true,
+      message: `Voice '${voice_name}' cloned successfully!`,
+      voice: { id: voice_id, name: voice_name },
+      voice_name,
+    });
+
+  } catch (err) {
+    console.error("Clone error:", err);
+    return res.status(500).json({ ok: false, error: "Server error: " + err.message });
   }
-
-  // ====== API Error ======
-  echo json_encode([
-    'ok' => false,
-    'error' => $data['message'] ?? 'Clone failed',
-    'http' => $http_code,
-    'response' => $response
-  ]);
-
-} catch (Throwable $e) {
-  http_response_code(500);
-  echo json_encode(['ok'=>false,'error'=>'Server error: '.$e->getMessage()]);
 }
-?>
