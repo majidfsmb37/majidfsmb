@@ -1,0 +1,10 @@
+{
+  "majidfsmb616": {
+    "password_hash": "$2y$10$nvZfqouiklnXhxQ7TdpqK.1mr6UiQ0lP17BfsCH84MGpxbowkQJH2",
+    "monthly_limit": 10000000,
+    "used_monthly": 0,
+    "daily_limit": 0,
+    "used_today": 0,
+    "browsers": {}
+  }
+}
