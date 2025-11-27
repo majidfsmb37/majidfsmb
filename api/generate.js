@@ -3,9 +3,9 @@ const http = require('http' );
 
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
-const CHUNK_CHAR_LIMIT = 2900;
-const MAX_ATTEMPTS_PER_CHUNK = 3;
-const REQUEST_TIMEOUT = 8000;
+const CHUNK_CHAR_LIMIT = 2000;
+const REQUEST_TIMEOUT = 50000;
+const MAX_PARALLEL_CHUNKS = 20;
 
 function makeRequest(url, options, postData ) {
   return new Promise((resolve, reject) => {
@@ -72,13 +72,57 @@ function stripId3(buffer) {
   return tagLen < buffer.length ? buffer.slice(tagLen) : buffer;
 }
 
+async function processChunk(chunkText, voice, speed, apiKeys, keyIndex) {
+  const maxAttempts = 3;
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const apiKey = apiKeys[(keyIndex + attempt) % apiKeys.length];
+    
+    const payload = JSON.stringify({
+      voice_id: voice,
+      input: chunkText,
+      audio_format: "mp3",
+      sample_rate: 44100,
+      speed: speed
+    });
+    
+    const options = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    };
+    
+    try {
+      let response = await makeRequest(ENDPOINT_PRIMARY, options, payload);
+      
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response = await makeRequest(ENDPOINT_BACKUP, options, payload);
+      }
+      
+      if (response.statusCode >= 200 && response.statusCode < 300 && response.body.length > 1000) {
+        return response.body;
+      }
+    } catch (error) {
+      if (attempt === maxAttempts - 1) {
+        throw error;
+      }
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  throw new Error('Failed to generate chunk after all attempts');
+}
+
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   
   try {
-    // Get API keys from environment variable
     const envKeys = process.env.SPEECHIFY_API_KEYS ? 
       process.env.SPEECHIFY_API_KEYS.split(',').map(k => k.trim()) : [];
     
@@ -93,7 +137,7 @@ module.exports = async (req, res) => {
     
     if (!apiKeys || apiKeys.length === 0) {
       return res.status(500).json({ 
-        error: 'No API keys configured. Please set SPEECHIFY_API_KEYS environment variable.' 
+        error: 'No API keys configured' 
       });
     }
     
@@ -102,64 +146,28 @@ module.exports = async (req, res) => {
     }
     
     const chunks = chunkText(text);
-    const audioBuffers = [];
-    let currentKeyIndex = 0;
     
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (!chunk) continue;
-      
-      let chunkSuccess = false;
-      
-      for (let attempt = 0; attempt < MAX_ATTEMPTS_PER_CHUNK; attempt++) {
-        const apiKey = apiKeys[currentKeyIndex % apiKeys.length];
-        
-        const payload = JSON.stringify({
-          voice_id: voice,
-          input: chunk,
-          audio_format: "mp3",
-          sample_rate: 44100,
-          speed: speed
-        });
-        
-        const options = {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(payload)
-          }
-        };
-        
-        try {
-          let response = await makeRequest(ENDPOINT_PRIMARY, options, payload);
-          
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            response = await makeRequest(ENDPOINT_BACKUP, options, payload);
-          }
-          
-          if (response.statusCode >= 200 && response.statusCode < 300 && response.body.length > 1000) {
-            const audioData = i > 0 ? stripId3(response.body) : response.body;
-            audioBuffers.push(audioData);
-            chunkSuccess = true;
-            break;
-          }
-        } catch (error) {
-          // Try next key
-        }
-        
-        currentKeyIndex++;
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
-      if (!chunkSuccess) {
-        return res.status(500).json({ 
-          error: `Failed to generate chunk ${i + 1} of ${chunks.length}` 
-        });
-      }
+    if (chunks.length > MAX_PARALLEL_CHUNKS) {
+      return res.status(400).json({ 
+        error: `Text too long. Maximum ${MAX_PARALLEL_CHUNKS} chunks allowed` 
+      });
     }
     
-    const finalAudio = Buffer.concat(audioBuffers);
+    console.log(`Processing ${chunks.length} chunks in parallel...`);
+    
+    const chunkPromises = chunks.map((chunk, index) => {
+      return processChunk(chunk, voice, speed, apiKeys, index);
+    });
+    
+    const audioChunks = await Promise.all(chunkPromises);
+    
+    console.log(`All ${chunks.length} chunks completed!`);
+    
+    const processedChunks = audioChunks.map((audio, index) => {
+      return index > 0 ? stripId3(audio) : audio;
+    });
+    
+    const finalAudio = Buffer.concat(processedChunks);
     
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', finalAudio.length);
