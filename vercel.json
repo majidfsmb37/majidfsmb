@@ -1,13 +1,13 @@
 {
   "functions": {
     "api/generate.js": {
-      "maxDuration": 60
+      "maxDuration": 10
     },
     "api/clone.js": {
-      "maxDuration": 60
+      "maxDuration": 10
     },
     "api/voices.js": {
-      "maxDuration": 60
+      "maxDuration": 10
     }
   }
 }
