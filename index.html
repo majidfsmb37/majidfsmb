@@ -1,176 +1,560 @@
-<?php
-session_start();
-
-// --- USERS JSON FILE ---
-$users_file = __DIR__ . '/data/users.json';
-$users = file_exists($users_file) ? json_decode(file_get_contents($users_file), true) : [];
-
-// --- CHECK LOGIN ---
-if(empty($_SESSION['username'])){
-    header('Location: login.php');
-    exit;
-}
-
-$username = $_SESSION['username'];
-$user = $users[$username] ?? null;
-if(!$user){
-    session_destroy();
-    header('Location: login.php');
-    exit;
-}
-
-// --- USER DATA ---
-$apiKeys = $user['apiKeys'] ?? [];
-$usedChars = $user['usedChars'] ?? 0;
-?>
-
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FSMB AI - Voice Platform</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+<!-- saved from url=(0025)https://www.fsmbplay.xyz/ -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>FSMB AI - Voice Generation</title>
+<link href="./FSMB AI - Voice Generation_files/css2" rel="stylesheet">
+<link rel="stylesheet" href="./FSMB AI - Voice Generation_files/all.min.css">
 <style>
-/* --- BASIC STYLES --- */
-:root{--bg:#07080a;--panel:#0f1316;--muted:#98a3b3;--neon:#19a6ff;--accent:#7de3c7;--card:#0b0d0f;}
-*{box-sizing:border-box;}
-body{margin:0;font-family:Inter,sans-serif;color:#e6eef6;background:#07080a;display:flex;min-height:100vh;}
-.left-nav{width:240px;background:#0f1316;display:flex;flex-direction:column;padding:20px;border-right:1px solid rgba(255,255,255,0.03);}
-.brand{display:flex;align-items:center;gap:12px;margin-bottom:24px;}
-.brand .logo{width:36px;height:36px;background:linear-gradient(135deg,var(--neon),#6de3ff);display:flex;align-items:center;justify-content:center;border-radius:8px;font-weight:700;color:#021024;}
-.brand h1{margin:0;font-size:16px;font-weight:600;color:#fff;}
-.nav-list{display:flex;flex-direction:column;gap:6px;}
-.nav-btn{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:transparent;color:#cfe8ff;border:none;cursor:pointer;font-size:14px;transition:.2s;}
-.nav-btn.active,.nav-btn:hover{background:rgba(25,166,255,0.1);}
-.nav-btn i{width:18px;text-align:center;color:#19a6ff;}
-.left-footer{margin-top:auto;font-size:13px;color:#98a3b3;}
-.left-footer .user-bubble{display:flex;gap:10px;align-items:center;margin-top:8px;}
-.left-footer .avatar{width:36px;height:36px;border-radius:999px;background:#0e1114;display:flex;align-items:center;justify-content:center;color:#fff;border:1px solid rgba(255,255,255,0.03);}
-.workspace{flex:1;display:flex;gap:18px;padding:20px;overflow:auto;}
-.center{flex:1;display:flex;flex-direction:column;gap:14px;}
-.editor{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:16px;min-height:400px;border:1px solid rgba(255,255,255,0.03);}
-textarea{width:100%;height:520px;background:transparent;border:1px dashed rgba(255,255,255,0.04);color:#dfefff;padding:14px;border-radius:8px;font-size:15px;resize:vertical;}
-.controls{display:flex;align-items:center;gap:12px;justify-content:space-between;margin-top:8px;}
-.generate-btn{background:linear-gradient(90deg,#19a6ff,#6de3ff);color:#021024;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;}
-.generate-btn[disabled]{opacity:0.5;cursor:not-allowed;background:#555;}
-.right-panel{width:360px;min-width:280px;background:#0f1316;border-radius:12px;padding:18px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 6px 30px rgba(0,0,0,0.6);height:calc(100vh - 40px);overflow:auto;}
-.model-card{background:linear-gradient(180deg,rgba(255,255,255,0.01),rgba(255,255,255,0.005));padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.02);margin-bottom:12px;}
-label.small{display:block;color:#98a3b3;font-size:13px;margin-bottom:6px;}
-input,select,textarea{background:#0b0d0f;border:1px solid rgba(255,255,255,0.03);padding:8px;border-radius:8px;color:#e6eef6;font-size:14px;width:100%;}
-.slider{width:100%;}
-.progress{background:rgba(255,255,255,0.03);height:8px;border-radius:999px;overflow:hidden;margin-top:8px;}
-.progress > i{display:block;height:100%;background:linear-gradient(90deg,#19a6ff,#6de3ff);width:0%;transition:width .3s ease;}
-.audio-wrap{margin-top:12px;}
-.voice-list-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:none;align-items:center;justify-content:center;z-index:999;}
-.voice-list-box{background:#0f1316;padding:24px;border-radius:16px;width:90%;max-width:500px;max-height:80vh;overflow:auto;border:1px solid rgba(255,255,255,0.1);}
-.voice-item{padding:12px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:.2s;}
-.voice-item:hover{background:rgba(25,166,255,0.1);}
-.voice-item.selected{background:rgba(25,166,255,0.2);font-weight:600;}
+  :root{ --bg:#07080a; --panel:#0f1316; --muted:#98a3b3; --neon:#19a6ff; --accent:#7de3c7; --card:#0b0d0f; }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{background:linear-gradient(180deg,#030406 0%,#08090b 100%);color:#e6eef6;display:flex;min-height:100vh;overflow:hidden;}
+  .left-nav{width:240px;background:linear-gradient(180deg,rgba(10,12,15,0.9),rgba(6,7,9,0.9));padding:20px;box-shadow:4px 0 18px rgba(0,0,0,0.6);border-right:1px solid rgba(255,255,255,0.03);display:flex;flex-direction:column;gap:18px;}
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand .logo{width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,var(--neon),#6de3ff);display:flex;align-items:center;justify-content:center;color:#021024;font-weight:700;box-shadow:0 4px 18px rgba(25,166,255,0.08);}
+  .brand h1{font-size:16px;margin:0;font-weight:600;color:#fff;}
+  .nav-list{display:flex;flex-direction:column;gap:6px;margin-top:8px;}
+  .nav-btn{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;color:#cfe8ff;background:transparent;border:none;cursor:pointer;text-align:left;font-size:14px;transition:.2s;}
+  .nav-btn.active,.nav-btn:hover{background:linear-gradient(90deg,rgba(25,166,255,0.06),rgba(125,227,199,0.03));box-shadow:inset 0 0 0 1px rgba(25,166,255,0.03);}
+  .nav-btn i{width:18px;text-align:center;color:#19a6ff;}
+  .left-footer{margin-top:auto;color:var(--muted);font-size:13px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;}
+  .kv{display:flex;justify-content:space-between;gap:10px;width:100%;}
+  .kv span:first-child{color:#cfe8ff;}
+  .user-bubble{display:flex;gap:10px;align-items:center;}
+  .avatar{width:36px;height:36px;border-radius:999px;background:#0e1114;display:flex;align-items:center;justify-content:center;color:#fff;border:1px solid rgba(255,255,255,0.03);}
+  .workspace{flex:1;display:flex;flex-direction:row;gap:18px;padding:20px;overflow:auto;}
+  .center{flex:1;display:flex;flex-direction:column;gap:14px;}
+  .editor{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:16px;min-height:400px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 6px 30px rgba(0,0,0,0.6);}
+  textarea#text{width:100%;height:520px;background:transparent;border:1px dashed rgba(255,255,255,0.04);color:#dfefff;padding:14px;border-radius:8px;font-size:15px;resize:vertical;}
+  .editor .controls{display:flex;align-items:center;gap:12px;justify-content:space-between;margin-top:8px;}
+  .generate-btn{background:linear-gradient(90deg,#19a6ff,#6de3ff);color:#021024;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer;box-shadow:0 8px 30px rgba(25,166,255,0.12);transition:.2s;display:flex;align-items:center;gap:6px;}
+  .generate-btn[disabled]{opacity:0.5;cursor:not-allowed;background:#555;}
+  .right-panel{width:360px;min-width:280px;background:linear-gradient(180deg,rgba(12,14,16,0.9),rgba(8,9,11,0.9));border-radius:12px;padding:18px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 6px 30px rgba(0,0,0,0.6);height:calc(100vh - 40px);overflow:auto;}
+  .card-title{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;}
+  .model-card{background:linear-gradient(180deg,rgba(255,255,255,0.01),rgba(255,255,255,0.005));padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.02);margin-bottom:12px;}
+  .model-name{font-weight:700;color:#eaf8ff;}
+  label.small{display:block;color:#98a3b3;font-size:13px;margin-bottom:6px;}
+  select,input[type="text"],input[type="number"],input[type="file"],input[type="password"]{background:#0b0d0f;border:1px solid rgba(255,255,255,0.03);padding:8px;border-radius:8px;color:#e6eef6;font-size:14px;width:100%;}
+  input[type="file"]{border:1px dashed rgba(255,255,255,0.2);}
+  .slider{width:100%;}
+  .muted-count{color:#98a3b3;font-size:13px}
+  .progress{background:rgba(255,255,255,0.03);height:8px;border-radius:999px;overflow:hidden;margin-top:8px}
+  .progress > i{display:block;height:100%;background:linear-gradient(90deg,#19a6ff,#6de3ff);width:0%;transition:width 0.3s ease;}
+  .audio-wrap{margin-top:12px}
+  .quota-alert{color:#ff6b6b;background:rgba(255,0,0,0.1);padding:12px;border-radius:8px;margin:10px 0;font-weight:500;}
+  .voice-list-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:none;align-items:center;justify-content:center;z-index:999;}
+  .voice-list-box{background:#0f1316;padding:24px;border-radius:16px;width:90%;max-width:500px;max-height:80vh;overflow:auto;border:1px solid rgba(255,255,255,0.1);}
+  .voice-item{padding:12px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:.2s;}
+  .voice-item:hover{background:rgba(25,166,255,0.1);}
+  .voice-item.selected{background:rgba(25,166,255,0.2);font-weight:600;}
+  .login-screen{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#030406 0%,#08090b 100%);display:flex;align-items:center;justify-content:center;z-index:9999;}
+  .login-box{background:#0f1316;padding:32px;border-radius:16px;width:90%;max-width:400px;border:1px solid rgba(255,255,255,0.1);}
+  @media (max-width: 1000px) {
+    .right-panel{display:none;}
+    .left-nav{width:72px;padding:12px;}
+    .brand h1,.nav-btn span,.left-footer > div > span:not(:first-child){display:none;}
+    .brand{justify-content:center;}
+    .nav-btn{justify-content:center;}
+  }
+  @media (max-width: 600px) {
+    .workspace{flex-direction:column;padding:12px;gap:12px;}
+    .right-panel{display:block;width:100%;order:1;height:auto;}
+    textarea#text{height:300px;}
+    .controls{flex-direction:column;gap:8px;align-items:stretch;}
+    .generate-btn{justify-content:center;}
+  }
 </style>
 </head>
 <body>
-
-<!-- LEFT NAV -->
-<aside class="left-nav">
-  <div class="brand">
-    <div class="logo">F</div>
-    <div>
-      <h1>FSMB AI</h1>
-      <div style="font-size:12px;color:#98a3b3">Text to Speech</div>
+  <!-- LOGIN SCREEN -->
+  <div class="login-screen" id="loginScreen" style="display: flex;">
+    <div class="login-box">
+      <div style="text-align:center;margin-bottom:24px;">
+        <div class="logo" style="width:48px;height:48px;margin:0 auto 12px;font-size:24px;">F</div>
+        <h2 style="margin:0;color:#fff;">FSMB AI</h2>
+        <p style="color:#98a3b3;margin:8px 0 0;">Text to Speech Platform</p>
+      </div>
+      <div style="display:grid;gap:12px;">
+        <input type="text" id="loginUsername" placeholder="Username" style="padding:12px;">
+        <input type="password" id="loginPassword" placeholder="API Key" style="padding:12px;">
+        <button class="generate-btn" onclick="handleLogin()" style="justify-content:center;width:100%;">
+          <i class="fa-solid fa-sign-in"></i> Login
+        </button>
+        <p style="color:#98a3b3;font-size:13px;text-align:center;margin:8px 0 0;">
+          Enter your Speechify API keys (comma-separated) as password
+        </p>
+      </div>
     </div>
   </div>
-  <nav class="nav-list">
-    <button class="nav-btn active" onclick="showSection('tts')"><i class="fa-solid fa-microphone"></i><span>Text to Speech</span></button>
-    <button class="nav-btn" onclick="showSection('clone')"><i class="fa-solid fa-clone"></i><span>Voice Cloning</span></button>
-    <button class="nav-btn" onclick="showSection('settings')"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
-  </nav>
-  <div class="left-footer">
-    <div>Characters Used: <span id="sideDailyUsed"><?php echo number_format($usedChars); ?></span></div>
-    <div class="user-bubble">
-      <div class="avatar"><?php echo strtoupper($username[0]); ?></div>
-      <div><div><?php echo htmlspecialchars($username); ?></div><div style="font-size:12px;color:#98a3b3">@fsmb</div></div>
-    </div>
-    <form method="post" action="logout.php" style="margin-top:8px;">
-      <button type="submit" class="nav-btn"><i class="fa-solid fa-sign-out"></i><span>Logout</span></button>
-    </form>
-  </div>
-</aside>
 
-<!-- MAIN WORKSPACE -->
-<main class="workspace">
-  <section class="center">
-    <!-- TTS -->
-    <div id="tts" class="editor section">
-      <h2>Text to Speech</h2>
-      <textarea id="text" maxlength="200000" placeholder="Type or paste text here..."></textarea>
-      <div class="controls">
-        <button class="generate-btn" id="generateBtn" onclick="startGenerate()"><i class="fa-solid fa-bolt"></i> Generate Speech</button>
-        <span id="charCount">0 chars</span>
+  <!-- MAIN APP -->
+  <aside class="left-nav">
+    <div class="brand">
+      <div class="logo">F</div>
+      <div><h1>FSMB AI</h1><div style="font-size:12px;color:#98a3b3">Text to Speech</div></div>
+    </div>
+    <nav class="nav-list">
+      <button class="nav-btn active" onclick="showSection(&#39;tts&#39;)"><i class="fa-solid fa-microphone"></i><span>Text to Speech</span></button>
+      <button class="nav-btn" onclick="showSection(&#39;clone&#39;)"><i class="fa-solid fa-clone"></i><span>Voice Cloning</span></button>
+      <button class="nav-btn" onclick="showSection(&#39;settings&#39;)"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
+    </nav>
+    <div class="left-footer">
+      <div class="kv"><span>Characters Used</span> <span id="sideDailyUsed">0</span></div>
+      <div class="user-bubble" style="margin-top:8px;">
+        <div class="avatar" id="userAvatar">U</div>
+        <div><div style="font-weight:600" id="userName">User</div><div style="font-size:12px;color:#98a3b3">@fsmb</div></div>
       </div>
-      <div class="progress"><i></i></div>
-      <div class="audio-wrap"><audio id="audio" controls style="width:100%;display:none"></audio></div>
+      <button class="nav-btn" onclick="handleLogout()" style="margin-top:8px;"><i class="fa-solid fa-sign-out"></i><span>Logout</span></button>
     </div>
-
-    <!-- VOICE CLONING -->
-    <div id="clone" class="editor section" style="display:none;">
-      <h2>Voice Cloning</h2>
-      <form id="cloneForm" style="display:grid;gap:12px;">
-        <input type="text" id="voiceName" placeholder="Voice Name" required>
-        <input type="file" id="audioFile" accept="audio/*" required>
-        <button type="submit" class="generate-btn"><i class="fa-solid fa-upload"></i> Upload & Clone</button>
-      </form>
-      <div id="cloneProgress" style="display:none;">
-        <div class="progress"><i id="cloneBar" style="width:0%"></i></div>
-        <span id="cloneText">Processing...</span>
-      </div>
-      <div id="cloneSuccess" style="display:none;color:#7de3c7;"><i class="fa-solid fa-check-circle"></i> Voice cloned successfully!</div>
-    </div>
-
-    <!-- SETTINGS -->
-    <div id="settings" class="editor section" style="display:none;">
-      <h2>Settings</h2>
-      <label class="small">Username</label>
-      <input type="text" value="<?php echo htmlspecialchars($username); ?>" readonly>
-      <label class="small">API Keys (comma-separated)</label>
-      <textarea id="settingsApiKeys"><?php echo implode(',', $apiKeys); ?></textarea>
-      <button class="generate-btn" onclick="saveSettings()"><i class="fa-solid fa-save"></i> Save Settings</button>
-    </div>
-  </section>
-
-  <!-- RIGHT PANEL -->
-  <aside class="right-panel">
-    <div class="model-card">
-      <div class="card-title"><span class="model-name">Voice</span></div>
-      <button onclick="openVoiceList()" style="padding:10px 14px;background:#19a6ff;color:#021024;border:none;border-radius:8px;cursor:pointer;font-weight:600;">Select Voice</button>
-      <div id="selectedVoiceName" style="margin-top:8px;color:#eaf8ff;font-weight:600;">No voice selected</div>
-    </div>
-    <label class="small">Title</label>
-    <input id="rightFilename" type="text" placeholder="audio-title" value="fsmb-voice">
-    <label class="small">Speed</label>
-    <input type="range" id="speedRange" min="-50" max="50" value="0" class="slider">
   </aside>
-</main>
+
+  <main class="workspace">
+    <section class="center">
+      <!-- TTS -->
+      <div id="tts" class="editor section">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h2 style="margin:0">Text to Speech</h2>
+          <div class="muted-count" id="topTotal">0 / 200,000</div>
+        </div>
+        <textarea id="text" maxlength="200000" placeholder="Type or paste your text here..."></textarea>
+        <div class="controls">
+          <button class="generate-btn" id="generateBtn" onclick="startGenerate()">
+            <i class="fa-solid fa-bolt"></i>&nbsp; <span id="btnText">Generate Speech</span>
+          </button>
+          <div class="muted-count" id="charCount">0 chars</div>
+        </div>
+        <div id="progress" style="margin-top:12px;">
+          <div class="progress"><i style="width:0%"></i></div>
+          <div id="progressText" style="margin-top:6px;color:#98a3b3">Ready</div>
+        </div>
+        <div class="audio-wrap">
+          <audio id="audio" controls="" style="width:100%;display:none"></audio>
+        </div>
+      </div>
+
+      <!-- VOICE CLONING -->
+      <div id="clone" class="editor section" style="display:none;">
+        <h2 style="margin:0 0 16px 0;">Voice Cloning</h2>
+        <div style="background:rgba(255,255,255,0.02); padding:16px; border-radius:12px; border:1px dashed rgba(255,215,0,0.2); margin-bottom:16px;">
+          <p style="margin:0; font-size:14px; color:#98a3b3;">
+            <i class="fa-solid fa-info-circle"></i>
+            Upload a <strong>clear 10-30 second audio</strong> of your voice (WAV, MP3, MP4).
+          </p>
+        </div>
+        <form id="cloneForm" style="display:grid; gap:12px;">
+          <input type="text" id="voiceName" placeholder="Voice Name (e.g. My Voice)" required="" style="padding:12px;">
+          <input type="file" id="audioFile" accept="audio/*,video/*,.mp3,.mpeg,.mpg,.wav" required="" style="padding:8px;">
+          <button type="submit" class="generate-btn" style="justify-content:center;">
+            <i class="fa-solid fa-upload"></i> Upload &amp; Clone
+          </button>
+        </form>
+        <div id="cloneProgress" style="margin-top:16px; display:none;">
+          <div class="progress"><i id="cloneBar" style="width:0%"></i></div>
+          <div id="cloneText" style="margin-top:6px;color:#98a3b3">Processing...</div>
+        </div>
+        <div id="cloneSuccess" style="display:none;margin-top:16px;padding:12px;background:rgba(125,227,199,0.1);border-radius:8px;color:#7de3c7;">
+          <i class="fa-solid fa-check-circle"></i> Voice cloned successfully!
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div id="settings" class="editor section" style="display:none;">
+        <h2 style="margin:0 0 16px 0;">Settings</h2>
+        <div style="display:grid;gap:16px;">
+          <div>
+            <label class="small">Username</label>
+            <input type="text" id="settingsUsername" readonly="" style="background:#0b0d0f;">
+          </div>
+          <div>
+            <label class="small">API Keys (comma-separated)</label>
+            <textarea id="settingsApiKeys" style="height:100px;font-family:monospace;font-size:12px;" placeholder="key1,key2,key3..."></textarea>
+          </div>
+          <button class="generate-btn" onclick="saveSettings()" style="justify-content:center;">
+            <i class="fa-solid fa-save"></i> Save Settings
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="right-panel">
+      <div class="model-card">
+        <div class="card-title"><span class="model-name">Voice</span></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+          <div style="flex:1;padding:10px;background:#0b0d0f;border-radius:8px;border:1px solid rgba(255,255,255,0.05);">
+            <div id="selectedVoiceName" style="color:#eaf8ff;font-weight:600;">No voice selected</div>
+          </div>
+          <button onclick="openVoiceList()" style="padding:10px 14px;background:#19a6ff;color:#021024;border:none;border-radius:8px;cursor:pointer;font-weight:600;">
+            <i class="fa-solid fa-list"></i>
+          </button>
+        </div>
+        <select id="rightVoiceSelect" style="display:none;"><option value="">-- Select Voice --</option><option value="255656c1-d447-4746-a405-6bb496bbb156">Majid (Cloned)</option><option value="580f907d-33c4-4d55-ac9e-fa62c383dd69">YY (Cloned)</option><option value="default_male">Default Male</option><option value="default_female">Default Female</option></select>
+      </div>
+      <div style="margin-top:12px;"><label class="small">Title</label><input id="rightFilename" type="text" placeholder="audio-title" value="fsmb-voice"></div>
+      <div style="margin-top:12px;"><label class="small">Speed</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="range" id="speedRange" min="-50" max="50" value="0" class="slider">
+          <input type="number" id="speedNumber" min="-50" max="50" value="0" style="width:60px;text-align:center;">
+          <span id="speedPct" style="color:#98a3b3;font-size:13px;">0%</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- VOICE MODAL -->
+  <div class="voice-list-modal" id="voiceModal">
+    <div class="voice-list-box">
+      <h3 style="margin-top:0;color:#fff">Select Voice</h3>
+      <div id="voiceListContainer" style="max-height:60vh;overflow:auto;padding:8px;"><div class="voice-item"><strong>Majid (Cloned)</strong><br><small>Custom</small></div><div class="voice-item"><strong>YY (Cloned)</strong><br><small>Custom</small></div><div class="voice-item"><strong>Default Male</strong><br><small>English</small></div><div class="voice-item"><strong>Default Female</strong><br><small>English</small></div></div>
+      <button onclick="closeVoiceList()" style="margin-top:16px;width:100%;padding:10px;background:#19a6ff;color:#021024;border:none;border-radius:8px;cursor:pointer;font-weight:600;">Close</button>
+    </div>
+  </div>
 
 <script>
-function showSection(id){
-  document.querySelectorAll('.section').forEach(s=>s.style.display='none');
-  document.getElementById(id).style.display='block';
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-  event.currentTarget.classList.add('active');
+// Configuration
+const MAX_CHARS = 200000;
+let currentUser = null;
+let apiKeys = [];
+let usedChars = 0;
+
+// DOM Elements
+const textArea = document.getElementById('text');
+const charCount = document.getElementById('charCount');
+const topTotal = document.getElementById('topTotal');
+const sideDailyUsed = document.getElementById('sideDailyUsed');
+const generateBtn = document.getElementById('generateBtn');
+const btnText = document.getElementById('btnText');
+const progressBar = document.querySelector('#progress .progress > i');
+const progressText = document.getElementById('progressText');
+const audio = document.getElementById('audio');
+
+// Initialize
+window.onload = function() {
+  checkAuth();
+  updateCounters();
+  loadVoices();
+  
+  // Event listeners
+  textArea.addEventListener('input', updateCounters);
+  
+  const speedRange = document.getElementById('speedRange');
+  const speedNumber = document.getElementById('speedNumber');
+  const speedPct = document.getElementById('speedPct');
+  speedRange.addEventListener('input', () => { 
+    speedNumber.value = speedRange.value; 
+    speedPct.textContent = speedRange.value + '%'; 
+  });
+  speedNumber.addEventListener('input', () => { 
+    let v = parseInt(speedNumber.value); 
+    if(v>50)v=50;
+    if(v<-50)v=-50; 
+    speedRange.value=v; 
+    speedPct.textContent=v+'%'; 
+  });
+  
+  // Clone form
+  document.getElementById('cloneForm').addEventListener('submit', handleClone);
+};
+
+// Authentication
+function checkAuth() {
+  const userData = localStorage.getItem('fsmbUser');
+  if (!userData) {
+    document.getElementById('loginScreen').style.display = 'flex';
+    return false;
+  }
+  
+  try {
+    currentUser = JSON.parse(userData);
+    apiKeys = currentUser.apiKeys || [];
+    usedChars = currentUser.usedChars || 0;
+    
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('userName').textContent = currentUser.username;
+    document.getElementById('userAvatar').textContent = currentUser.username.charAt(0).toUpperCase();
+    document.getElementById('settingsUsername').value = currentUser.username;
+    document.getElementById('settingsApiKeys').value = apiKeys.join(',');
+    
+    updateCounters();
+    return true;
+  } catch (e) {
+    localStorage.removeItem('fsmbUser');
+    document.getElementById('loginScreen').style.display = 'flex';
+    return false;
+  }
 }
 
-document.getElementById('text').addEventListener('input',function(){
-  document.getElementById('charCount').innerText = this.value.length + ' chars';
-});
-
-function startGenerate(){
-  alert('TTS generate function to integrate with your API.');
+function handleLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value.trim();
+  
+  if (!username || !password) {
+    alert('Please enter username and API keys');
+    return;
+  }
+  
+  const keys = password.split(',').map(k => k.trim()).filter(k => k);
+  if (keys.length === 0) {
+    alert('Please enter at least one API key');
+    return;
+  }
+  
+  currentUser = {
+    username: username,
+    apiKeys: keys,
+    usedChars: 0
+  };
+  
+  localStorage.setItem('fsmbUser', JSON.stringify(currentUser));
+  checkAuth();
 }
-function openVoiceList(){alert('Voice selection modal here.');}
-function saveSettings(){alert('Save API keys to users.json via backend.');}
+
+function handleLogout() {
+  if (confirm('Are you sure you want to logout?')) {
+    localStorage.removeItem('fsmbUser');
+    location.reload();
+  }
+}
+
+function saveSettings() {
+  const keys = document.getElementById('settingsApiKeys').value.split(',').map(k => k.trim()).filter(k => k);
+  if (keys.length === 0) {
+    alert('Please enter at least one API key');
+    return;
+  }
+  
+  currentUser.apiKeys = keys;
+  apiKeys = keys;
+  localStorage.setItem('fsmbUser', JSON.stringify(currentUser));
+  alert('Settings saved successfully!');
+}
+
+// UI Functions
+function updateCounters() {
+  const chars = textArea.value.length;
+  charCount.textContent = `${chars.toLocaleString()} chars`;
+  topTotal.textContent = `${chars.toLocaleString()} / ${MAX_CHARS.toLocaleString()}`;
+  sideDailyUsed.textContent = usedChars.toLocaleString();
+}
+
+function showSection(id) {
+  document.querySelectorAll('.section').forEach(s => s.style.display = 'none');
+  document.getElementById(id).style.display = 'block';
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+}
+
+function openVoiceList() { 
+  document.getElementById('voiceModal').style.display = 'flex'; 
+  loadVoices(); 
+}
+
+function closeVoiceList() { 
+  document.getElementById('voiceModal').style.display = 'none'; 
+}
+
+// Voice Loading
+async function loadVoices() {
+  const select = document.getElementById('rightVoiceSelect');
+  const container = document.getElementById('voiceListContainer');
+  container.innerHTML = '<div style="text-align:center;color:#98a3b3;padding:16px;">Loading...</div>';
+  
+  try {
+    const res = await fetch('/api/voices');
+    const voices = await res.json();
+    
+    select.innerHTML = '<option value="">-- Select Voice --</option>';
+    container.innerHTML = '';
+    
+    voices.forEach(v => {
+      const opt = document.createElement('option'); 
+      opt.value = v.id; 
+      opt.textContent = v.name; 
+      select.appendChild(opt);
+      
+      const div = document.createElement('div'); 
+      div.className = 'voice-item';
+      div.innerHTML = `<strong>${v.name}</strong><br><small>${v.language || 'English'}</small>`;
+      div.onclick = () => {
+        document.querySelectorAll('.voice-item').forEach(i => i.classList.remove('selected'));
+        div.classList.add('selected');
+        document.getElementById('selectedVoiceName').textContent = v.name;
+        select.value = v.id;
+        closeVoiceList();
+      };
+      container.appendChild(div);
+    });
+  } catch (error) {
+    container.innerHTML = '<div style="color:#ff6b6b">Failed to load voices</div>';
+  }
+}
+
+// Voice Generation
+async function startGenerate() {
+  if (!checkAuth()) return;
+  
+  const text = textArea.value.trim();
+  const chars = text.length;
+  const voiceId = document.getElementById('rightVoiceSelect').value;
+  
+  if (!voiceId) {
+    alert('Please select a voice');
+    return;
+  }
+  if (!text) {
+    alert('Please enter text');
+    return;
+  }
+  if (chars > MAX_CHARS) {
+    alert(`Max ${MAX_CHARS} characters allowed`);
+    return;
+  }
+  if (apiKeys.length === 0) {
+    alert('No API keys configured. Please add API keys in Settings.');
+    return;
+  }
+  
+  generateBtn.disabled = true;
+  btnText.textContent = 'Generating...';
+  progressBar.style.width = '0%';
+  progressText.textContent = 'Starting...';
+  
+  try {
+    const speed = 1 + (parseInt(document.getElementById('speedRange').value) / 100);
+    const title = document.getElementById('rightFilename').value || 'fsmb-voice';
+    
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: text,
+        voice: voiceId,
+        apiKeys: apiKeys,
+        speed: speed
+      })
+    });
+    
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Generation failed');
+    }
+    
+    // Get audio as blob
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    
+    audio.src = url;
+    audio.style.display = 'block';
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = title + '.mp3';
+    a.textContent = 'Download';
+    a.style.color = '#19a6ff';
+    a.style.marginLeft = '8px';
+    
+    progressBar.style.width = '100%';
+    progressText.innerHTML = 'Done ';
+    progressText.appendChild(a);
+    
+    // Update usage
+    usedChars += chars;
+    currentUser.usedChars = usedChars;
+    localStorage.setItem('fsmbUser', JSON.stringify(currentUser));
+    updateCounters();
+    
+    btnText.textContent = 'Generate Speech';
+    
+  } catch (err) {
+    alert('Error: ' + err.message);
+    progressText.textContent = 'Failed';
+    btnText.textContent = 'Generate Speech';
+  } finally {
+    generateBtn.disabled = false;
+  }
+}
+
+// Voice Cloning
+async function handleClone(e) {
+  e.preventDefault();
+  
+  if (!checkAuth()) return;
+  
+  const voiceName = document.getElementById('voiceName').value.trim();
+  const fileInput = document.getElementById('audioFile');
+  const file = fileInput.files[0];
+  
+  if (!voiceName) {
+    alert('Please enter a voice name');
+    return;
+  }
+  if (!file) {
+    alert('Please select an audio file');
+    return;
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    alert('File too large (max 50MB)');
+    return;
+  }
+  if (apiKeys.length === 0) {
+    alert('No API keys configured. Please add API keys in Settings.');
+    return;
+  }
+  
+  document.getElementById('cloneSuccess').style.display = 'none';
+  document.getElementById('cloneProgress').style.display = 'block';
+  document.getElementById('cloneBar').style.width = '30%';
+  document.getElementById('cloneText').textContent = 'Uploading...';
+  
+  try {
+    // Read file as base64
+    const reader = new FileReader();
+    const audioBase64 = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    
+    document.getElementById('cloneBar').style.width = '60%';
+    document.getElementById('cloneText').textContent = 'Cloning voice...';
+    
+    const res = await fetch('/api/clone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voiceName: voiceName,
+        audioBase64: audioBase64,
+        apiKey: apiKeys[0], // Use first API key for cloning
+        username: currentUser.username
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (!data.ok) {
+      throw new Error(data.error || 'Cloning failed');
+    }
+    
+    document.getElementById('cloneBar').style.width = '100%';
+    document.getElementById('cloneText').textContent = 'Success!';
+    document.getElementById('cloneSuccess').style.display = 'block';
+    document.getElementById('cloneProgress').style.display = 'none';
+    
+    // Reset form
+    document.getElementById('cloneForm').reset();
+    
+    // Reload voices
+    setTimeout(() => {
+      loadVoices();
+      document.getElementById('cloneSuccess').style.display = 'none';
+    }, 3000);
+    
+  } catch (err) {
+    alert('Error: ' + err.message);
+    document.getElementById('cloneProgress').style.display = 'none';
+  }
+}
 </script>
 
-</body>
-</html>
+
+</body></html>
