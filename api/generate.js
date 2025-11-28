@@ -1,24 +1,59 @@
+// generate.js
+
 const https = require('https');
 const http = require('http');
 
-const ENDPOINT = "https://api.sws.speechify.com/v1/audio/stream";
-const CHUNK_CHAR_LIMIT = 2000;
-const REQUEST_TIMEOUT = 50000;
-const MAX_PARALLEL_CHUNKS = 30; // ~60k chars
+// ---------- Config ----------
 
-// ---------- Error helpers ----------
+const CONFIG = {
+  ENDPOINT: 'https://api.sws.speechify.com/v1/audio/stream',
+  CHUNK_CHAR_LIMIT: 2000,
+  REQUEST_TIMEOUT_MS: 50000,
+  MAX_PARALLEL_CHUNKS: 30, // ~60k chars
+  MIN_AUDIO_BYTES: 1000,   // minimum size to treat audio as valid
+};
 
-function createHttpError(statusCode, code, message, meta) {
+// ---------- Utility helpers ----------
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createHttpError(statusCode, code, message, details) {
   const err = new Error(message);
   err.statusCode = statusCode;
   err.code = code;
-  if (meta) err.meta = meta;
+  if (details) err.details = details;
   return err;
 }
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function sendErrorResponse(res, error) {
+  const status =
+    typeof error.statusCode === 'number' && error.statusCode >= 400
+      ? error.statusCode
+      : 500;
 
-// ---------- HTTP request helper ----------
+  const payload = {
+    success: false,
+    error: {
+      code: error.code || 'INTERNAL_ERROR',
+      message: error.message || 'Internal server error',
+    },
+  };
+
+  if (process.env.NODE_ENV !== 'production') {
+    if (error.details) payload.error.details = error.details;
+    if (error.stack) payload.error.stack = error.stack;
+  }
+
+  if (status === 405) {
+    res.setHeader('Allow', 'POST');
+  }
+
+  res.status(status).json(payload);
+}
+
+// ---------- Low-level HTTP helper ----------
 
 function makeRequest(url, options, postData) {
   return new Promise((resolve, reject) => {
@@ -38,18 +73,21 @@ function makeRequest(url, options, postData) {
     });
 
     req.on('error', (err) => {
-      console.error('Request error for URL:', url, err);
-      reject(err);
+      reject(
+        createHttpError(502, 'SPEECHIFY_NETWORK_ERROR', 'Network error calling Speechify.', {
+          originalError: err.message || String(err),
+          code: err.code,
+        })
+      );
     });
 
-    req.setTimeout(REQUEST_TIMEOUT, () => {
-      console.error('Request timeout for URL:', url);
+    req.setTimeout(CONFIG.REQUEST_TIMEOUT_MS, () => {
       req.destroy();
       reject(
         createHttpError(
           504,
-          'REQUEST_TIMEOUT',
-          `Request to Speechify timed out after ${REQUEST_TIMEOUT}ms`
+          'SPEECHIFY_TIMEOUT',
+          `Speechify request timed out after ${CONFIG.REQUEST_TIMEOUT_MS}ms.`
         )
       );
     });
@@ -66,7 +104,7 @@ function chunkText(text) {
   let pos = 0;
 
   while (pos < text.length) {
-    let end = Math.min(pos + CHUNK_CHAR_LIMIT, text.length);
+    let end = Math.min(pos + CONFIG.CHUNK_CHAR_LIMIT, text.length);
 
     if (end < text.length) {
       const lastPeriod = text.lastIndexOf('.', end);
@@ -75,7 +113,9 @@ function chunkText(text) {
       }
     }
 
-    chunks.push(text.substring(pos, end).trim());
+    const chunk = text.substring(pos, end).trim();
+    if (chunk) chunks.push(chunk);
+
     pos = end;
   }
 
@@ -111,7 +151,7 @@ function getApiKeys() {
     );
   }
 
-  // Support newline/comma/semicolon separated keys
+  // Allow newline / comma / semicolon-separated keys
   const allKeys = raw
     .split(/[\r\n,;]+/)
     .map((k) => k.trim())
@@ -121,7 +161,7 @@ function getApiKeys() {
     throw createHttpError(
       500,
       'SPEECHIFY_API_KEYS_EMPTY',
-      'SPEECHIFY_API_KEYS is defined but contains no keys.'
+      'SPEECHIFY_API_KEYS is defined but contains no non-empty keys.'
     );
   }
 
@@ -130,7 +170,7 @@ function getApiKeys() {
 
   if (invalidKeys.length) {
     console.warn(
-      `Ignoring ${invalidKeys.length} invalid Speechify API keys (contain whitespace).`
+      `Ignoring ${invalidKeys.length} invalid Speechify API key(s) (whitespace not allowed).`
     );
   }
 
@@ -138,7 +178,7 @@ function getApiKeys() {
     throw createHttpError(
       500,
       'SPEECHIFY_API_KEYS_INVALID',
-      'No usable Speechify API keys found in SPEECHIFY_API_KEYS. Keys must not contain spaces.'
+      'No usable Speechify API keys found in SPEECHIFY_API_KEYS (whitespace not allowed).'
     );
   }
 
@@ -153,21 +193,22 @@ function getApiKeys() {
   return uniqueKeys;
 }
 
-// ---------- Speechify call per chunk ----------
+// ---------- Speechify per-chunk request ----------
 
 async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
   const maxAttempts = 3;
   let lastError = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const apiKey = apiKeys[(keyIndex + attempt) % apiKeys.length];
+    const keyPos = (keyIndex + attempt) % apiKeys.length;
+    const apiKey = apiKeys[keyPos];
 
     const payload = JSON.stringify({
       voice_id: voice,
       input: chunkTextValue,
       audio_format: 'mp3',
       sample_rate: 44100,
-      speed: speed,
+      speed,
     });
 
     const options = {
@@ -180,47 +221,40 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
     };
 
     try {
-      const response = await makeRequest(ENDPOINT, options, payload);
-      const { statusCode, body } = response;
+      const { statusCode, body } = await makeRequest(CONFIG.ENDPOINT, options, payload);
 
-      // Success path
+      // 2xx → success path
       if (statusCode >= 200 && statusCode < 300) {
-        if (body.length > 1000) {
+        if (body.length >= CONFIG.MIN_AUDIO_BYTES) {
           return body;
         }
 
-        // Too small body even though 2xx
         lastError = createHttpError(
           502,
           'SPEECHIFY_EMPTY_AUDIO',
-          `Speechify returned success but audio payload was unexpectedly small (length=${body.length}).`,
+          `Speechify returned success but audio payload was too small (length=${body.length}).`,
           { statusCode, length: body.length }
         );
-        console.warn('[Speechify] 2xx with too-small body:', lastError.meta);
+        console.warn('[Speechify] 2xx with too-small body:', lastError.details);
       } else {
-        // Non-2xx: inspect body (limit size for logs)
-        const textPreview = body.slice(0, 2000).toString('utf8');
+        // Non-2xx → decode message if possible
+        const bodyPreview = body.slice(0, 2000).toString('utf8') || '';
         let parsed;
         try {
-          parsed = JSON.parse(textPreview);
+          parsed = JSON.parse(bodyPreview);
         } catch {
           parsed = null;
         }
 
         const upstreamMessage =
-          parsed?.error || parsed?.message || textPreview || 'No body';
+          parsed?.error || parsed?.message || bodyPreview || 'No body';
 
         console.warn(
           `[Speechify] Non-2xx status: ${statusCode} (attempt ${attempt + 1}/${maxAttempts})`,
-          {
-            statusCode,
-            attempt: attempt + 1,
-            keyIndex: (keyIndex + attempt) % apiKeys.length,
-            upstreamMessage,
-          }
+          { statusCode, keyIndex: keyPos, upstreamMessage }
         );
 
-        // Auth errors: do not retry; configuration problem
+        // Auth-related: do not retry (config issue)
         if (statusCode === 401 || statusCode === 403) {
           throw createHttpError(
             500,
@@ -230,33 +264,26 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
           );
         }
 
-        // Rate limiting or server errors: may be transient -> retry
-        if (statusCode === 429 || statusCode >= 500) {
-          lastError = createHttpError(
-            502,
-            'SPEECHIFY_UNAVAILABLE',
-            `Speechify is unavailable or rate-limited (status ${statusCode}).`,
-            { statusCode, upstreamMessage }
-          );
-        } else if (statusCode >= 400 && statusCode < 500) {
-          // Client-side issue in our request (bad params/voice/etc). Don't retry.
+        // Client request issue: do not retry
+        if (statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
           throw createHttpError(
             400,
             'SPEECHIFY_BAD_REQUEST',
-            `Speechify rejected the request (status ${statusCode}). Check voice id, text, and parameters.`,
-            { statusCode, upstreamMessage }
-          );
-        } else {
-          lastError = createHttpError(
-            502,
-            'SPEECHIFY_ERROR',
-            `Unexpected response from Speechify (status ${statusCode}).`,
+            `Speechify rejected the request (status ${statusCode}). Check voice, text, and parameters.`,
             { statusCode, upstreamMessage }
           );
         }
+
+        // 429 or 5xx → treat as transient; may retry
+        lastError = createHttpError(
+          502,
+          'SPEECHIFY_UNAVAILABLE',
+          `Speechify is unavailable or rate-limited (status ${statusCode}).`,
+          { statusCode, upstreamMessage }
+        );
       }
     } catch (err) {
-      // Our own HttpError for non-retriable conditions: propagate immediately
+      // Known non-retriable custom errors: bubble immediately
       if (
         err &&
         err.code &&
@@ -265,7 +292,6 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
         throw err;
       }
 
-      // Network or other errors: capture and maybe retry
       lastError = err;
       console.error(
         `[Speechify] Request error (attempt ${attempt + 1}/${maxAttempts}):`,
@@ -273,18 +299,15 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
       );
     }
 
-    // Small delay before retrying with same/next key
+    // If we reached here, we will retry (if attempts left)
     await delay(150);
   }
 
-  // After all attempts failed
   if (lastError) {
-    // If the last error is already an HttpError, propagate it
     if (lastError.statusCode && lastError.code) {
       throw lastError;
     }
 
-    // Wrap generic error
     throw createHttpError(
       502,
       'SPEECHIFY_FAILED',
@@ -293,7 +316,6 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
     );
   }
 
-  // Fallback (should not reach here)
   throw createHttpError(
     502,
     'SPEECHIFY_FAILED',
@@ -304,18 +326,43 @@ async function processChunk(chunkTextValue, voice, speed, apiKeys, keyIndex) {
 // ---------- Main handler ----------
 
 module.exports = async (req, res) => {
+  // Method check
   if (req.method !== 'POST') {
-    return res
-      .status(405)
-      .json({ error: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' });
+    return sendErrorResponse(
+      res,
+      createHttpError(
+        405,
+        'METHOD_NOT_ALLOWED',
+        'Only POST is allowed on this endpoint.',
+        { allowedMethods: ['POST'] }
+      )
+    );
+  }
+
+  // Content-Type check (for JSON payloads)
+  const contentType = (req.headers['content-type'] || '').toLowerCase();
+  if (contentType && !contentType.includes('application/json')) {
+    return sendErrorResponse(
+      res,
+      createHttpError(
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Content-Type must be application/json.'
+      )
+    );
   }
 
   try {
     const apiKeys = getApiKeys();
 
-    const { text, voice, speed = 1.0 } = req.body || {};
+    // In many frameworks (Next.js/Express), req.body is already parsed JSON
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-    // Request validation
+    const { text, voice } = body;
+    const speedRaw = body.speed;
+
+    // ----- Request validation -----
+
     if (typeof text !== 'string' || !text.trim()) {
       throw createHttpError(
         400,
@@ -332,31 +379,42 @@ module.exports = async (req, res) => {
       );
     }
 
-    if (
-      speed !== undefined &&
-      (typeof speed !== 'number' ||
-        !Number.isFinite(speed) ||
-        speed <= 0 ||
-        speed > 4)
-    ) {
-      throw createHttpError(
-        400,
-        'INVALID_SPEED',
-        'Field "speed" must be a number between 0 and 4.'
-      );
+    let speed = 1.0;
+    if (speedRaw !== undefined) {
+      const numericSpeed = Number(speedRaw);
+      if (
+        !Number.isFinite(numericSpeed) ||
+        numericSpeed <= 0 ||
+        numericSpeed > 4
+      ) {
+        throw createHttpError(
+          400,
+          'INVALID_SPEED',
+          'Field "speed" must be a number between 0 and 4 if provided.'
+        );
+      }
+      speed = numericSpeed;
     }
 
     const chunks = chunkText(text);
 
-    if (chunks.length > MAX_PARALLEL_CHUNKS) {
+    if (chunks.length === 0) {
       throw createHttpError(
         400,
-        'TEXT_TOO_LONG',
-        `Text too long. Max ${MAX_PARALLEL_CHUNKS} chunks allowed.`
+        'EMPTY_TEXT',
+        'Text must contain at least one non-empty chunk after processing.'
       );
     }
 
-    console.log(`Processing ${chunks.length} chunks in parallel...`);
+    if (chunks.length > CONFIG.MAX_PARALLEL_CHUNKS) {
+      throw createHttpError(
+        400,
+        'TEXT_TOO_LONG',
+        `Text too long. Max ${CONFIG.MAX_PARALLEL_CHUNKS} chunks allowed.`
+      );
+    }
+
+    console.log(`Processing ${chunks.length} Speechify chunks in parallel...`);
 
     const audioChunks = await Promise.all(
       chunks.map((chunk, i) => processChunk(chunk, voice, speed, apiKeys, i))
@@ -368,29 +426,15 @@ module.exports = async (req, res) => {
       audioChunks.map((a, i) => (i > 0 ? stripId3(a) : a))
     );
 
+    // ----- Success response (binary audio) -----
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', finalAudio.length);
+    // Optional: some clients may like a success hint
+    res.setHeader('X-Generation-Status', 'success');
+
     return res.status(200).send(finalAudio);
   } catch (error) {
     console.error('Generation error:', error);
-
-    const status =
-      typeof error.statusCode === 'number' && error.statusCode >= 400
-        ? error.statusCode
-        : 500;
-
-    const payload = {
-      error: error.code || 'INTERNAL_ERROR',
-      message: error.message || 'Internal server error',
-    };
-
-    // In non-production, return a bit more detail (no secrets)
-    if (process.env.NODE_ENV !== 'production') {
-      if (error.meta) payload.meta = error.meta;
-      if (error.code && !payload.error) payload.error = error.code;
-      if (error.stack) payload.stack = error.stack;
-    }
-
-    return res.status(status).json(payload);
+    return sendErrorResponse(res, error);
   }
 };
