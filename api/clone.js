@@ -1,101 +1,72 @@
-import formidable from "formidable";
-import fs from "fs";
-import fetch from "node-fetch";
+// api/clone.js
+import fs from 'fs';
+import path from 'path';
+import { parse } from 'formidable';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export const config = {
-  api: {
-    bodyParser: false, // must disable for file uploads
-    sizeLimit: "50mb", // max upload size
-  },
+  api: { bodyParser: false }, // we handle parsing manually
 };
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
-  }
+export default async function handler(req) {
+  if (req.method !== 'POST') return new Response(JSON.stringify({ error: 'Only POST allowed' }), { status: 405 });
 
-  try {
-    const form = formidable({ multiples: false });
+  const form = new parse.IncomingForm();
+  form.uploadDir = path.join(process.cwd(), 'uploads');
+  form.keepExtensions = true;
+  if (!fs.existsSync(form.uploadDir)) fs.mkdirSync(form.uploadDir, { recursive: true });
 
-    // Parse multipart form
-    const { fields, files } = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => {
-        if (err) reject(err);
-        else resolve({ fields, files });
-      });
+  const data = await new Promise((resolve, reject) => {
+    form.parse(req, (err, fields, files) => {
+      if (err) reject(err);
+      else resolve({ fields, files });
     });
+  });
 
-    // Validate input
-    const voiceName = fields.voice_name?.trim() || "Voice_" + Date.now();
-    if (!files.audio) {
-      return res.status(400).json({ ok: false, error: "No audio uploaded" });
-    }
+  const username = data.fields.username;
+  if (!username) return new Response(JSON.stringify({ error: 'No user' }), { status: 400 });
 
-    const file = files.audio;
-    if (file.size > 50 * 1024 * 1024) {
-      return res.status(400).json({ ok: false, error: "File too large (max 50MB)" });
-    }
+  const name = (data.fields.clone_name || '').trim();
+  if (!name) return new Response(JSON.stringify({ error: 'Name required' }), { status: 400 });
 
-    // Read file
-    const buffer = fs.readFileSync(file.filepath);
+  const file = data.files.clone_file;
+  if (!file || !file.filepath) return new Response(JSON.stringify({ error: 'No file uploaded' }), { status: 400 });
 
-    // API key
-    const apiKey = process.env.SPEECHIFY_API_KEY || "";
-    if (!apiKey) {
-      return res.status(500).json({ ok: false, error: "No API key configured" });
-    }
+  const ext = path.extname(file.originalFilename || '').slice(1).toLowerCase();
+  const allowedExt = ['mp3', 'mpeg', 'mpg', 'mp4'];
+  if (!allowedExt.includes(ext)) return new Response(JSON.stringify({ error: `Unsupported file type: .${ext}` }), { status: 400 });
 
-    // Prepare form data
-    const formData = new FormData();
-    formData.append("name", voiceName);
-    formData.append("gender", "male");
-    formData.append("consent", JSON.stringify({
-      fullName: "VercelUser",
-      email: "user@example.com",
-    }));
-    formData.append("sample", new Blob([buffer]), file.originalFilename || "sample.mp3");
+  // Step 1: Move file to uploads
+  const tempFile = path.join(form.uploadDir, `temp_${file.originalFilename}`);
+  fs.renameSync(file.filepath, tempFile);
 
-    // Call Speechify API
-    const response = await fetch("https://api.sws.speechify.com/v1/voices", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: formData,
-    });
-
-    const text = await response.text();
-    let data;
+  // Step 2: Convert to MP3 if needed
+  let targetPath = path.join(form.uploadDir, `clone_${Date.now()}.mp3`);
+  if (ext !== 'mp3') {
     try {
-      data = JSON.parse(text);
-    } catch (err) {
-      console.error("Non-JSON API response:", text);
-      return res.status(500).json({
-        ok: false,
-        error: "Speechify API returned non-JSON response",
-        apiResponse: text,
-        httpStatus: response.status,
-      });
+      await execAsync(`ffmpeg -y -i ${JSON.stringify(tempFile)} -vn -ar 44100 -ac 2 -b:a 192k ${JSON.stringify(targetPath)}`);
+      fs.unlinkSync(tempFile);
+    } catch (e) {
+      return new Response(JSON.stringify({ error: 'Conversion failed', details: e.message }), { status: 500 });
     }
-
-    if (!data.id) {
-      return res.status(response.status).json({
-        ok: false,
-        error: data.message || "Clone failed",
-        httpStatus: response.status,
-      });
-    }
-
-    // Success
-    return res.status(200).json({
-      ok: true,
-      message: `Voice '${voiceName}' cloned successfully!`,
-      voice: { id: data.id, name: data.display_name || voiceName },
-      voice_name: voiceName,
-    });
-
-  } catch (err) {
-    console.error("Clone error:", err);
-    return res.status(500).json({ ok: false, error: "Server error: " + err.message });
+  } else {
+    targetPath = path.join(form.uploadDir, `clone_${Date.now()}.mp3`);
+    fs.renameSync(tempFile, targetPath);
   }
+
+  // Step 3: Save info in clones.json
+  const clonesFile = path.join(process.cwd(), 'clones.json');
+  const clones = fs.existsSync(clonesFile) ? JSON.parse(fs.readFileSync(clonesFile, 'utf-8')) : {};
+  if (!clones[username]) clones[username] = [];
+  clones[username].push({
+    name,
+    file: path.basename(targetPath),
+    date: new Date().toISOString(),
+  });
+  fs.writeFileSync(clonesFile, JSON.stringify(clones, null, 2));
+
+  return new Response(JSON.stringify({ success: true, message: `Voice '${name}' cloned successfully as MP3`, file: path.basename(targetPath) }), { status: 200 });
 }
