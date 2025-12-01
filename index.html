@@ -1,11 +1,11 @@
-<!DOCTYPE html>
-<!-- saved from url=(0025)https://www.fsmbplay.xyz/ -->
-<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>FSMB AI - Voice Generation</title>
-<link href="./FSMB AI - Voice Generation_files/css2" rel="stylesheet">
-<link rel="stylesheet" href="./FSMB AI - Voice Generation_files/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
 <style>
   :root{ --bg:#07080a; --panel:#0f1316; --muted:#98a3b3; --neon:#19a6ff; --accent:#7de3c7; --card:#0b0d0f; }
   *{box-sizing:border-box;}
@@ -69,7 +69,7 @@
 </head>
 <body>
   <!-- LOGIN SCREEN -->
-  <div class="login-screen" id="loginScreen" style="display: flex;">
+  <div class="login-screen" id="loginScreen">
     <div class="login-box">
       <div style="text-align:center;margin-bottom:24px;">
         <div class="logo" style="width:48px;height:48px;margin:0 auto 12px;font-size:24px;">F</div>
@@ -96,9 +96,9 @@
       <div><h1>FSMB AI</h1><div style="font-size:12px;color:#98a3b3">Text to Speech</div></div>
     </div>
     <nav class="nav-list">
-      <button class="nav-btn active" onclick="showSection(&#39;tts&#39;)"><i class="fa-solid fa-microphone"></i><span>Text to Speech</span></button>
-      <button class="nav-btn" onclick="showSection(&#39;clone&#39;)"><i class="fa-solid fa-clone"></i><span>Voice Cloning</span></button>
-      <button class="nav-btn" onclick="showSection(&#39;settings&#39;)"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
+      <button class="nav-btn active" onclick="showSection('tts')"><i class="fa-solid fa-microphone"></i><span>Text to Speech</span></button>
+      <button class="nav-btn" onclick="showSection('clone')"><i class="fa-solid fa-clone"></i><span>Voice Cloning</span></button>
+      <button class="nav-btn" onclick="showSection('settings')"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
     </nav>
     <div class="left-footer">
       <div class="kv"><span>Characters Used</span> <span id="sideDailyUsed">0</span></div>
@@ -130,7 +130,7 @@
           <div id="progressText" style="margin-top:6px;color:#98a3b3">Ready</div>
         </div>
         <div class="audio-wrap">
-          <audio id="audio" controls="" style="width:100%;display:none"></audio>
+          <audio id="audio" controls style="width:100%;display:none"></audio>
         </div>
       </div>
 
@@ -144,10 +144,10 @@
           </p>
         </div>
         <form id="cloneForm" style="display:grid; gap:12px;">
-          <input type="text" id="voiceName" placeholder="Voice Name (e.g. My Voice)" required="" style="padding:12px;">
-          <input type="file" id="audioFile" accept="audio/*,video/*,.mp3,.mpeg,.mpg,.wav" required="" style="padding:8px;">
+          <input type="text" id="voiceName" placeholder="Voice Name (e.g. My Voice)" required style="padding:12px;">
+          <input type="file" id="audioFile" accept="audio/*,video/*,.mp3,.mpeg,.mpg,.wav" required style="padding:8px;">
           <button type="submit" class="generate-btn" style="justify-content:center;">
-            <i class="fa-solid fa-upload"></i> Upload &amp; Clone
+            <i class="fa-solid fa-upload"></i> Upload & Clone
           </button>
         </form>
         <div id="cloneProgress" style="margin-top:16px; display:none;">
@@ -165,7 +165,7 @@
         <div style="display:grid;gap:16px;">
           <div>
             <label class="small">Username</label>
-            <input type="text" id="settingsUsername" readonly="" style="background:#0b0d0f;">
+            <input type="text" id="settingsUsername" readonly style="background:#0b0d0f;">
           </div>
           <div>
             <label class="small">API Keys (comma-separated)</label>
@@ -189,7 +189,9 @@
             <i class="fa-solid fa-list"></i>
           </button>
         </div>
-        <select id="rightVoiceSelect" style="display:none;"><option value="">-- Select Voice --</option><option value="255656c1-d447-4746-a405-6bb496bbb156">Majid (Cloned)</option><option value="580f907d-33c4-4d55-ac9e-fa62c383dd69">YY (Cloned)</option><option value="default_male">Default Male</option><option value="default_female">Default Female</option></select>
+        <select id="rightVoiceSelect" style="display:none;">
+          <option value="">-- Select Voice --</option>
+        </select>
       </div>
       <div style="margin-top:12px;"><label class="small">Title</label><input id="rightFilename" type="text" placeholder="audio-title" value="fsmb-voice"></div>
       <div style="margin-top:12px;"><label class="small">Speed</label>
@@ -206,7 +208,9 @@
   <div class="voice-list-modal" id="voiceModal">
     <div class="voice-list-box">
       <h3 style="margin-top:0;color:#fff">Select Voice</h3>
-      <div id="voiceListContainer" style="max-height:60vh;overflow:auto;padding:8px;"><div class="voice-item"><strong>Majid (Cloned)</strong><br><small>Custom</small></div><div class="voice-item"><strong>YY (Cloned)</strong><br><small>Custom</small></div><div class="voice-item"><strong>Default Male</strong><br><small>English</small></div><div class="voice-item"><strong>Default Female</strong><br><small>English</small></div></div>
+      <div id="voiceListContainer" style="max-height:60vh;overflow:auto;padding:8px;">
+        <div style="text-align:center;color:#98a3b3;padding:16px;">Loading voices...</div>
+      </div>
       <button onclick="closeVoiceList()" style="margin-top:16px;width:100%;padding:10px;background:#19a6ff;color:#021024;border:none;border-radius:8px;cursor:pointer;font-weight:600;">Close</button>
     </div>
   </div>
@@ -555,6 +559,5 @@ async function handleClone(e) {
   }
 }
 </script>
-
-
-</body></html>
+</body>
+</html>
