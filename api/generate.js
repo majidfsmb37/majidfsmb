@@ -1,135 +1,133 @@
-import fs from "fs";
-import path from "path";
-
 export const config = {
-  runtime: "nodejs"
+  runtime: "edge"
 };
 
-// ---------- PATHS ----------
-const ROOT = process.cwd();
-const DATA = path.join(ROOT, "data");
+const SPEECHIFY_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
+const SPEECHIFY_BACKUP  = "https://api.speechify.com/v1/audio/stream";
 
-const USERS_FILE = path.join(DATA, "users.json");
-const HISTORY_FILE = path.join(DATA, "history.json");
-const API_KEYS_FILE = path.join(DATA, "apis.txt");
-const KEY_INDEX_FILE = path.join(DATA, "key_index.txt");
-
-// ---------- SPEECHIFY ----------
-const API_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
-const API_BACKUP  = "https://api.speechify.com/v1/audio/stream";
-
-const CHUNK_SIZE = 3000;
-const RETRIES = 5;
-
-// ---------- HELPERS ----------
-function ensureFile(file, defaultData) {
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(defaultData, null, 2));
-    return defaultData;
-  }
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
+const CHUNK_LIMIT = 3000;
+const RETRIES = 3;
 
 function chunkText(text) {
-  const out = [];
+  const parts = [];
   let i = 0;
   while (i < text.length) {
-    let cut = Math.min(i + CHUNK_SIZE, text.length);
-    out.push(text.slice(i, cut));
-    i = cut;
+    parts.push(text.slice(i, i + CHUNK_LIMIT));
+    i += CHUNK_LIMIT;
   }
-  return out;
+  return parts;
 }
 
-async function ttsCall(url, key, text, voice, speed) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      input: text,
-      voice_id: voice,
-      audio_format: "mp3",
-      sample_rate: 44100,
-      speed
-    })
-  });
+function extractAudio(body) {
+  // if binary mp3 starts
+  for (let i = 0; i < body.length - 2; i++) {
+    if (body.charCodeAt(i) === 0xff && (body.charCodeAt(i + 1) & 0xe0) === 0xe0) {
+      return body.slice(i);
+    }
+  }
 
-  if (!r.ok) throw new Error("API failed");
-  return Buffer.from(await r.arrayBuffer());
+  // base64 JSON fallback
+  try {
+    const j = JSON.parse(body);
+    if (j.audio) return Buffer.from(j.audio, "base64");
+    if (j.audio_data) return Buffer.from(j.audio_data, "base64");
+  } catch {}
+
+  return null;
 }
 
-// ---------- HANDLER ----------
 export default async function handler(req) {
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
   }
 
-  fs.mkdirSync(DATA, { recursive: true });
+  let data;
+  try {
+    data = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
+  }
 
-  const { text, voice, title = "speech", speed = 1 } = await req.json();
+  const text  = (data.text || "").trim();
+  const voice = data.voice;
 
   if (!text || !voice) {
-    return new Response(JSON.stringify({ error: "Invalid input" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "Missing text or voice" }), { status: 400 });
   }
 
-  const users = ensureFile(USERS_FILE, {});
-  const history = ensureFile(HISTORY_FILE, []);
-
-  const keys = fs.existsSync(API_KEYS_FILE)
-    ? fs.readFileSync(API_KEYS_FILE, "utf8").split(/\r?\n/).filter(Boolean)
-    : [];
-
-  if (!keys.length) {
-    return new Response(JSON.stringify({ error: "No API keys" }), { status: 500 });
+  const KEYS = process.env.SPEECHIFY_KEYS?.split(",").map(k => k.trim()).filter(Boolean);
+  if (!KEYS || KEYS.length === 0) {
+    return new Response(JSON.stringify({ error: "No API keys configured" }), { status: 500 });
   }
-
-  let keyIndex = fs.existsSync(KEY_INDEX_FILE)
-    ? Number(fs.readFileSync(KEY_INDEX_FILE, "utf8"))
-    : 0;
 
   const chunks = chunkText(text);
-  let audio = Buffer.alloc(0);
+  let fullAudio = new Uint8Array();
 
-  for (const part of chunks) {
-    let done = false;
+  for (let i = 0; i < chunks.length; i++) {
+    let success = false;
 
-    for (let i = 0; i < RETRIES && !done; i++) {
-      const key = keys[keyIndex % keys.length];
+    for (let r = 0; r < RETRIES && !success; r++) {
+      const key = KEYS[(i + r) % KEYS.length];
+
       try {
-        const buf =
-          await ttsCall(API_PRIMARY, key, part, voice, speed)
-            .catch(() => ttsCall(API_BACKUP, key, part, voice, speed));
+        let res = await fetch(SPEECHIFY_PRIMARY, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${key}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            voice_id: voice,
+            input: chunks[i],
+            audio_format: "mp3",
+            sample_rate: 44100
+          })
+        });
 
-        audio = Buffer.concat([audio, buf]);
-        done = true;
-      } catch {
-        keyIndex++;
-        fs.writeFileSync(KEY_INDEX_FILE, String(keyIndex));
+        if (!res.ok) {
+          res = await fetch(SPEECHIFY_BACKUP, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${key}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              voice_id: voice,
+              input: chunks[i],
+              audio_format: "mp3",
+              sample_rate: 44100
+            })
+          });
+        }
+
+        const body = await res.text();
+        const audio = extractAudio(body);
+
+        if (!audio || audio.length < 500) throw "Audio empty";
+
+        const merged = new Uint8Array(fullAudio.length + audio.length);
+        merged.set(fullAudio);
+        merged.set(audio, fullAudio.length);
+        fullAudio = merged;
+
+        success = true;
+      } catch (e) {
+        if (r === RETRIES - 1) {
+          return new Response(JSON.stringify({
+            error: "Speechify failed",
+            detail: String(e)
+          }), { status: 500 });
+        }
       }
     }
-
-    if (!done) {
-      return new Response(JSON.stringify({ error: "Chunk failed" }), { status: 500 });
-    }
   }
-
-  const base64 = audio.toString("base64");
-
-  history.push({
-    title,
-    voice,
-    chars: text.length,
-    time: Date.now()
-  });
-
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history.slice(-100), null, 2));
 
   return new Response(JSON.stringify({
     success: true,
-    audio_data: base64,
-    filename: `${title}.mp3`
-  }), { status: 200 });
+    audio_base64: Buffer.from(fullAudio).toString("base64"),
+    filename: "output.mp3"
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
 }
