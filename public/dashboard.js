@@ -1,4 +1,4 @@
-// pages/dashboard.js
+// public/dashboard.js
 import { useEffect, useState, useRef } from 'react';
 
 export default function Dashboard({ username, quota }) {
