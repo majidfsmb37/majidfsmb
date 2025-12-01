@@ -5,7 +5,121 @@ const https = require('https');
 const http = require('http');
 
 // Configuration
+const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";// api/generate.js - Vercel Serverless Function for Speechify TTS
+
+const https = require('https');
+
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
+const ENDPOINT_BACKUP  = "https://api.speechify.com/v1/audio/stream";
+const CHUNK_LIMIT = 2900; // max chars per chunk
+const MAX_ATTEMPTS = 3;   // retry per chunk
+const DELAY_BETWEEN_KEYS = 100; // ms
+
+function makeRequest(url, apiKey, payload) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(payload);
+    const req = https.request(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data)
+      }
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({status: res.statusCode, body: Buffer.concat(chunks)}));
+    });
+
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function chunkText(text) {
+  const chunks = [];
+  let pos = 0;
+  while (pos < text.length) {
+    let end = Math.min(pos + CHUNK_LIMIT, text.length);
+    const lastDot = text.lastIndexOf('.', end);
+    if (lastDot > pos && lastDot > end * 0.6) end = lastDot + 1;
+    chunks.push(text.substring(pos, end).trim());
+    pos = end;
+  }
+  return chunks;
+}
+
+function stripID3(buffer) {
+  if (!buffer || buffer.length < 10 || buffer.toString('utf8',0,3) !== 'ID3') return buffer;
+  let size = 0;
+  for (let i = 0; i < 4; i++) size = (size << 7) | (buffer[6+i] & 0x7F);
+  return buffer.slice(10 + size);
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({error:'Method not allowed'});
+
+  try {
+    const { text, voice, apiKeys = [], speed = 1.0 } = req.body;
+
+    if (!text || !voice || !Array.isArray(apiKeys) || apiKeys.length === 0) {
+      return res.status(400).json({error:'Missing required fields: text, voice, apiKeys'});
+    }
+
+    const chunks = chunkText(text);
+    const audioBuffers = [];
+    let keyIndex = 0;
+
+    for (let i=0; i<chunks.length; i++) {
+      const chunk = chunks[i];
+      let success = false;
+
+      for (let attempt=0; attempt<MAX_ATTEMPTS && !success; attempt++) {
+        const apiKey = apiKeys[keyIndex % apiKeys.length];
+        keyIndex++;
+
+        const payload = {
+          voice_id: voice,
+          input: chunk,
+          audio_format: "mp3",
+          sample_rate: 44100,
+          speed
+        };
+
+        try {
+          let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload);
+
+          if (response.status < 200 || response.status >= 300) {
+            response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload);
+          }
+
+          if (response.status >= 200 && response.status < 300 && response.body.length > 1000) {
+            const buf = (i>0) ? stripID3(response.body) : response.body;
+            audioBuffers.push(buf);
+            success = true;
+            break;
+          }
+
+        } catch(err) {
+          await new Promise(r => setTimeout(r, DELAY_BETWEEN_KEYS));
+        }
+      }
+
+      if (!success) return res.status(500).json({error:`Chunk ${i+1} failed`});
+    }
+
+    const finalAudio = Buffer.concat(audioBuffers);
+    res.setHeader('Content-Type','audio/mpeg');
+    res.setHeader('Content-Length',finalAudio.length);
+    return res.status(200).send(finalAudio);
+
+  } catch(err) {
+    console.error('Generation error:', err);
+    return res.status(500).json({error: err.message || 'Internal server error'});
+  }
+}
+
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
 const CHUNK_CHAR_LIMIT = 2900;
 const MAX_ATTEMPTS_PER_CHUNK = 3;
