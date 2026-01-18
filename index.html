@@ -364,7 +364,7 @@ async function loadVoices() {
   container.innerHTML = '<div style="text-align:center;color:#98a3b3;padding:16px;">Loading...</div>';
   
   try {
-    const res = await fetch('/api/voices');
+    const res = await fetch('/api/generate');
     const voices = await res.json();
     
     select.innerHTML = '<option value="">-- Select Voice --</option>';
