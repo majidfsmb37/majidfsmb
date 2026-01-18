@@ -1,18 +1,16 @@
 // api/generate.js
 const https = require('https');
 
-// ================= CONFIG =================
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
 const CHUNK_CHAR_LIMIT = 1200;
 const MAX_ATTEMPTS = 3;
-const REQUEST_TIMEOUT = 25000; // 25s
+const REQUEST_TIMEOUT = 25000;
 const MIN_AUDIO_LENGTH = 1000;
-const RETRY_DELAY = 200; // ms
-// ========================================
+const RETRY_DELAY = 200;
 
-// Helper: HTTP POST request with refined logging
-function makeRequest(url, apiKey, payload, chunkNum, attempt) {
+// Helper: HTTP POST request with detailed logging
+function makeRequest(url, apiKeyIndex, apiKey, payload, chunkNum, attempt, endpointName) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
     const options = {
@@ -24,24 +22,27 @@ function makeRequest(url, apiKey, payload, chunkNum, attempt) {
       }
     };
 
+    console.log(`[${new Date().toISOString()}] Chunk ${chunkNum} | Attempt ${attempt} | API Key Index ${apiKeyIndex} | Sending request to ${endpointName}`);
+    console.log(`   Payload preview: "${payload.input.slice(0, 50)}${payload.input.length > 50 ? '...' : ''}"`);
+
     const req = https.request(url, options, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         const buffer = Buffer.concat(chunks);
-        console.log(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Response Status: ${res.statusCode}, Length: ${buffer.length}`);
+        console.log(`[${new Date().toISOString()}] Chunk ${chunkNum} | Attempt ${attempt} | ${endpointName} response status: ${res.statusCode}, length: ${buffer.length}`);
         resolve({ status: res.statusCode, body: buffer });
       });
     });
 
     req.on('error', err => {
-      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Request error: ${err.message}`);
+      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} | Attempt ${attempt} | ${endpointName} error: ${err.message}`);
       reject(err);
     });
 
     req.setTimeout(REQUEST_TIMEOUT, () => {
       req.destroy();
-      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Request timeout`);
+      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} | Attempt ${attempt} | ${endpointName} request timeout`);
       reject(new Error('Request timeout'));
     });
 
@@ -50,7 +51,6 @@ function makeRequest(url, apiKey, payload, chunkNum, attempt) {
   });
 }
 
-// Split text into chunks
 function chunkText(text) {
   const chunks = [];
   let pos = 0;
@@ -67,7 +67,6 @@ function chunkText(text) {
   return chunks;
 }
 
-// Strip ID3 tags from MP3 (except first chunk)
 function stripId3(buffer) {
   if (!buffer || buffer.length < 10 || buffer.toString('utf8', 0, 3) !== 'ID3') return buffer;
   let size = 0;
@@ -76,7 +75,6 @@ function stripId3(buffer) {
   return tagLen < buffer.length ? buffer.slice(tagLen) : buffer;
 }
 
-// ================= MAIN HANDLER =================
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
 
@@ -103,6 +101,7 @@ module.exports = async (req, res) => {
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS && !success; attempt++) {
         const apiKey = apiKeys[keyIndex % apiKeys.length];
+
         const payload = {
           voice_id: voice,
           input: chunk,
@@ -112,16 +111,16 @@ module.exports = async (req, res) => {
         };
 
         try {
-          // Primary request
-          let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload, i + 1, attempt + 1);
+          // Primary endpoint
+          let response = await makeRequest(ENDPOINT_PRIMARY, keyIndex, apiKey, payload, i + 1, attempt + 1, "Primary");
 
-          // Backup if primary fails or audio too short
-          if (response.status < 200 || response.status >= 300 || response.body.length < MIN_AUDIO_LENGTH) {
-            console.log(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} - Primary failed, trying backup`);
-            response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload, i + 1, attempt + 1);
+          // Backup if failed
+          if (response.status < 200 || response.status >= 300 || response.body.length < 1000) {
+            console.warn(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} - Primary failed, trying backup`);
+            response = await makeRequest(ENDPOINT_BACKUP, keyIndex, apiKey, payload, i + 1, attempt + 1, "Backup");
           }
 
-          if (response.status >= 200 && response.status < 300 && response.body.length > MIN_AUDIO_LENGTH) {
+          if (response.status >= 200 && response.status < 300 && response.body.length >= 1000) {
             const audioData = i > 0 ? stripId3(response.body) : response.body;
             audioBuffers.push(audioData);
             success = true;
@@ -134,7 +133,7 @@ module.exports = async (req, res) => {
           console.error(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} error: ${err.message}`);
         }
 
-        if (!success && attempt === MAX_ATTEMPTS - 1) keyIndex++; // rotate API key after max attempts
+        if (!success && attempt === MAX_ATTEMPTS - 1) keyIndex++;
         await new Promise(r => setTimeout(r, RETRY_DELAY));
       }
 
@@ -154,7 +153,7 @@ module.exports = async (req, res) => {
     return res.status(200).send(finalAudio);
 
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Generation error:`, err);
+    console.error(`[${new Date().toISOString()}] Generation error: ${err}`);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 };
