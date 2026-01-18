@@ -5,19 +5,34 @@ const https = require('https');
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
 
-const CHUNK_CHAR_LIMIT = 1200;  // safe chunk size
-const MAX_ATTEMPTS = 3;          // retry attempts
-const REQUEST_TIMEOUT = 25000;   // 25s timeout
-const MIN_AUDIO_LENGTH = 1000;   // minimum MP3 length
-const RETRY_DELAY = 200;         // ms delay between retries
+const CHUNK_CHAR_LIMIT = 800;     // safe chunk size
+const MAX_ATTEMPTS = 3;           // retry attempts per chunk
+const REQUEST_TIMEOUT = 30000;    // 30s timeout
+const MIN_AUDIO_LENGTH = 1000;    // minimum MP3 length
+const RETRY_DELAY = 200;          // ms delay between retries
 // ========================================
 
-// ====== LOGGING UTILS ======
+// ====== LOGGING ======
 const logInfo = (msg) => console.log(`[INFO] [${new Date().toISOString()}] ${msg}`);
 const logWarn = (msg) => console.warn(`[WARN] [${new Date().toISOString()}] ${msg}`);
 const logError = (msg) => console.error(`[ERROR] [${new Date().toISOString()}] ${msg}`);
 
-// ====== HTTP REQUEST WITH RETRY ======
+// ====== READ KEYS FROM ENV ======
+const apiKeys = [
+  process.env.API_KEY_1,
+  process.env.API_KEY_2,
+  process.env.API_KEY_3,
+  process.env.API_KEY_4,
+  process.env.API_KEY_5,
+  process.env.API_KEY_6,
+  process.env.API_KEY_7
+].filter(Boolean);
+
+if (!apiKeys.length) {
+  logError('No API keys found in environment variables!');
+}
+
+// ====== HTTP REQUEST WITH LOGGING ======
 async function makeRequest(url, apiKey, payload, chunkNum, attempt, endpointName) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
@@ -66,7 +81,6 @@ function chunkText(text) {
   while (pos < text.length) {
     let end = Math.min(pos + CHUNK_CHAR_LIMIT, text.length);
 
-    // Prefer sentence boundary
     if (end < text.length) {
       const lastDot = text.lastIndexOf('.', end);
       if (lastDot > pos) end = lastDot + 1;
@@ -80,7 +94,7 @@ function chunkText(text) {
   return chunks;
 }
 
-// ====== ID3 STRIP ======
+// ====== STRIP ID3 TAGS ======
 function stripId3(buffer) {
   if (!buffer || buffer.length < 10 || buffer.toString('utf8', 0, 3) !== 'ID3') return buffer;
   let size = 0;
@@ -89,8 +103,10 @@ function stripId3(buffer) {
   return tagLen < buffer.length ? buffer.slice(tagLen) : buffer;
 }
 
-// ====== GENERATE AUDIO ======
-async function generateChunk(chunk, voice, apiKeys, chunkNum) {
+// ====== GENERATE SINGLE CHUNK ======
+async function generateChunk(chunk, voice, chunkNum) {
+  if (!apiKeys.length) throw new Error('No API keys available');
+
   let keyIndex = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -104,10 +120,10 @@ async function generateChunk(chunk, voice, apiKeys, chunkNum) {
     };
 
     try {
-      // Try primary
+      // Primary endpoint
       let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload, chunkNum, attempt, 'Primary');
 
-      // Fallback to backup if failed
+      // Backup if primary fails
       if (response.status < 200 || response.status >= 300 || response.body.length < MIN_AUDIO_LENGTH) {
         logWarn(`Chunk ${chunkNum} Attempt ${attempt} - Primary failed, trying backup`);
         response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload, chunkNum, attempt, 'Backup');
@@ -118,7 +134,6 @@ async function generateChunk(chunk, voice, apiKeys, chunkNum) {
       } else {
         logWarn(`Chunk ${chunkNum} Attempt ${attempt} failed: Status=${response.status}, Length=${response.body.length}`);
       }
-
     } catch (err) {
       logError(`Chunk ${chunkNum} Attempt ${attempt} request error: ${err.message}`);
     }
@@ -135,11 +150,9 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
 
   try {
-    const { text, voice, apiKeys } = req.body;
+    const { text, voice } = req.body;
 
-    if (!text || !voice || !apiKeys?.length) {
-      return res.status(400).json({ error: 'Missing text, voice, or apiKeys' });
-    }
+    if (!text || !voice) return res.status(400).json({ error: 'Missing text or voice' });
 
     const cleanText = text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
     if (cleanText.length < 2) return res.status(400).json({ error: 'Text too short' });
@@ -151,7 +164,7 @@ module.exports = async (req, res) => {
 
     for (let i = 0; i < chunks.length; i++) {
       logInfo(`Generating chunk ${i + 1}/${chunks.length}, length=${chunks[i].length}`);
-      const audioData = await generateChunk(chunks[i], voice, apiKeys, i + 1);
+      const audioData = await generateChunk(chunks[i], voice, i + 1);
       audioBuffers.push(i > 0 ? stripId3(audioData) : audioData);
       logInfo(`Chunk ${i + 1} generated successfully`);
     }
