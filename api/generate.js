@@ -1,12 +1,14 @@
 // api/generate.js
 const https = require('https');
 
-// Config
+// ================= CONFIG =================
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
-const CHUNK_CHAR_LIMIT = 2800;
-const MAX_ATTEMPTS = 3;
-const REQUEST_TIMEOUT = 8000; // 8s Vercel limit
+const CHUNK_CHAR_LIMIT = 1500;      // smaller chunks for stability
+const MAX_ATTEMPTS = 3;             // retries per chunk
+const REQUEST_TIMEOUT = 20000;      // 20s timeout for slow API
+const MIN_AUDIO_LENGTH = 1000;      // minimum valid MP3 length
+// ========================================
 
 // Helper: HTTP POST request
 function makeRequest(url, apiKey, payload) {
@@ -34,23 +36,27 @@ function makeRequest(url, apiKey, payload) {
   });
 }
 
-// Split text into chunks
+// Split text into safe chunks
 function chunkText(text) {
   const chunks = [];
   let pos = 0;
   while (pos < text.length) {
     let end = Math.min(pos + CHUNK_CHAR_LIMIT, text.length);
+
+    // Try to cut at sentence boundary
     if (end < text.length) {
       const lastDot = text.lastIndexOf('.', end);
       if (lastDot > pos) end = lastDot + 1;
     }
-    chunks.push(text.slice(pos, end).trim());
+
+    const chunk = text.slice(pos, end).trim();
+    if (chunk) chunks.push(chunk);
     pos = end;
   }
   return chunks;
 }
 
-// Strip ID3 tags from MP3
+// Strip ID3 tags from MP3 (except first chunk)
 function stripId3(buffer) {
   if (!buffer || buffer.length < 10 || buffer.toString('utf8', 0, 3) !== 'ID3') return buffer;
   let size = 0;
@@ -59,7 +65,7 @@ function stripId3(buffer) {
   return tagLen < buffer.length ? buffer.slice(tagLen) : buffer;
 }
 
-// Main handler
+// ================= MAIN HANDLER =================
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
 
@@ -77,8 +83,11 @@ module.exports = async (req, res) => {
     const audioBuffers = [];
     let keyIndex = 0;
 
+    console.log(`Total chunks to generate: ${chunks.length}`);
+
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      console.log(`Generating chunk ${i + 1}/${chunks.length} (length=${chunk.length})`);
       let success = false;
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS && !success; attempt++) {
@@ -89,17 +98,18 @@ module.exports = async (req, res) => {
           // Primary endpoint
           let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload);
 
-          // Backup if failed
+          // Backup endpoint if primary failed
           if (response.status < 200 || response.status >= 300) {
             console.log(`Primary failed (chunk ${i + 1}), trying backup`);
             response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload);
           }
 
-          if (response.status >= 200 && response.status < 300 && response.body.length > 1000) {
+          // Check valid response
+          if (response.status >= 200 && response.status < 300 && response.body.length > MIN_AUDIO_LENGTH) {
             const audioData = i > 0 ? stripId3(response.body) : response.body;
             audioBuffers.push(audioData);
             success = true;
-            break;
+            console.log(`Chunk ${i + 1} generated successfully`);
           } else {
             console.log(`Chunk ${i + 1} failed with status ${response.status}`);
           }
@@ -108,8 +118,10 @@ module.exports = async (req, res) => {
           console.error(`Chunk ${i + 1} attempt ${attempt + 1} error:`, err.message);
         }
 
-        keyIndex++;
-        await new Promise(r => setTimeout(r, 100));
+        // Change API key only after max attempts
+        if (!success && attempt === MAX_ATTEMPTS - 1) keyIndex++;
+
+        await new Promise(r => setTimeout(r, 100)); // small delay
       }
 
       if (!success) {
@@ -117,6 +129,7 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Concatenate all chunks
     const finalAudio = Buffer.concat(audioBuffers);
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', finalAudio.length);
