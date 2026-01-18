@@ -4,15 +4,15 @@ const https = require('https');
 // ================= CONFIG =================
 const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
-const CHUNK_CHAR_LIMIT = 1200;       // smaller chunks for stable generation
-const MAX_ATTEMPTS = 3;              // retries per chunk
-const REQUEST_TIMEOUT = 25000;       // 25s timeout for slow API
-const MIN_AUDIO_LENGTH = 1000;       // minimum valid MP3 length
-const RETRY_DELAY = 200;             // ms delay between retries
+const CHUNK_CHAR_LIMIT = 1200;
+const MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT = 25000; // 25s
+const MIN_AUDIO_LENGTH = 1000;
+const RETRY_DELAY = 200; // ms
 // ========================================
 
-// Helper: HTTP POST request
-function makeRequest(url, apiKey, payload) {
+// Helper: HTTP POST request with refined logging
+function makeRequest(url, apiKey, payload, chunkNum, attempt) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
     const options = {
@@ -27,29 +27,39 @@ function makeRequest(url, apiKey, payload) {
     const req = https.request(url, options, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      res.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        console.log(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Response Status: ${res.statusCode}, Length: ${buffer.length}`);
+        resolve({ status: res.statusCode, body: buffer });
+      });
     });
 
-    req.on('error', reject);
-    req.setTimeout(REQUEST_TIMEOUT, () => { req.destroy(); reject(new Error('Request timeout')); });
+    req.on('error', err => {
+      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Request error: ${err.message}`);
+      reject(err);
+    });
+
+    req.setTimeout(REQUEST_TIMEOUT, () => {
+      req.destroy();
+      console.error(`[${new Date().toISOString()}] Chunk ${chunkNum} Attempt ${attempt} - Request timeout`);
+      reject(new Error('Request timeout'));
+    });
+
     req.write(data);
     req.end();
   });
 }
 
-// Split text into safe chunks
+// Split text into chunks
 function chunkText(text) {
   const chunks = [];
   let pos = 0;
   while (pos < text.length) {
     let end = Math.min(pos + CHUNK_CHAR_LIMIT, text.length);
-
-    // Try to cut at sentence boundary
     if (end < text.length) {
       const lastDot = text.lastIndexOf('.', end);
       if (lastDot > pos) end = lastDot + 1;
     }
-
     const chunk = text.slice(pos, end).trim();
     if (chunk) chunks.push(chunk);
     pos = end;
@@ -84,60 +94,67 @@ module.exports = async (req, res) => {
     const audioBuffers = [];
     let keyIndex = 0;
 
-    console.log(`Total chunks to generate: ${chunks.length}`);
+    console.log(`[${new Date().toISOString()}] Total chunks to generate: ${chunks.length}`);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      console.log(`Generating chunk ${i + 1}/${chunks.length} (length=${chunk.length})`);
+      console.log(`[${new Date().toISOString()}] Generating chunk ${i + 1}/${chunks.length}, length=${chunk.length}`);
       let success = false;
 
       for (let attempt = 0; attempt < MAX_ATTEMPTS && !success; attempt++) {
         const apiKey = apiKeys[keyIndex % apiKeys.length];
-        const payload = { voice_id: voice, input: chunk, audio_format: 'mp3', sample_rate: 44100, speed };
+        const payload = {
+          voice_id: voice,
+          input: chunk,
+          audio_format: 'mp3',
+          sample_rate: 44100,
+          speed: parseFloat(speed) || 1.0
+        };
 
         try {
-          // Primary endpoint
-          let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload);
+          // Primary request
+          let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload, i + 1, attempt + 1);
 
-          // Backup endpoint if primary fails
+          // Backup if primary fails or audio too short
           if (response.status < 200 || response.status >= 300 || response.body.length < MIN_AUDIO_LENGTH) {
-            console.log(`Primary failed (chunk ${i + 1}, attempt ${attempt + 1}), trying backup`);
-            response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload);
+            console.log(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} - Primary failed, trying backup`);
+            response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload, i + 1, attempt + 1);
           }
 
-          // Check if valid audio received
           if (response.status >= 200 && response.status < 300 && response.body.length > MIN_AUDIO_LENGTH) {
             const audioData = i > 0 ? stripId3(response.body) : response.body;
             audioBuffers.push(audioData);
             success = true;
-            console.log(`Chunk ${i + 1} generated successfully`);
+            console.log(`[${new Date().toISOString()}] Chunk ${i + 1} generated successfully`);
           } else {
-            console.log(`Chunk ${i + 1} failed with status ${response.status}, length: ${response.body.length}`);
+            console.warn(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} failed: Status ${response.status}, Length ${response.body.length}`);
           }
 
         } catch (err) {
-          console.error(`Chunk ${i + 1} attempt ${attempt + 1} error:`, err.message);
+          console.error(`[${new Date().toISOString()}] Chunk ${i + 1} Attempt ${attempt + 1} error: ${err.message}`);
         }
 
-        // Change API key only after max attempts failed
-        if (!success && attempt === MAX_ATTEMPTS - 1) keyIndex++;
-
-        await new Promise(r => setTimeout(r, RETRY_DELAY)); // small delay between retries
+        if (!success && attempt === MAX_ATTEMPTS - 1) keyIndex++; // rotate API key after max attempts
+        await new Promise(r => setTimeout(r, RETRY_DELAY));
       }
 
       if (!success) {
-        return res.status(500).json({ error: `Failed to generate chunk ${i + 1}. Check API keys or timeout.` });
+        return res.status(500).json({
+          error: `Failed to generate chunk ${i + 1}`,
+          chunk: i + 1,
+          attempts: MAX_ATTEMPTS,
+          suggestion: "Check API keys, network, or reduce chunk size"
+        });
       }
     }
 
-    // Concatenate all audio chunks
     const finalAudio = Buffer.concat(audioBuffers);
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', finalAudio.length);
     return res.status(200).send(finalAudio);
 
   } catch (err) {
-    console.error('Generation error:', err);
+    console.error(`[${new Date().toISOString()}] Generation error:`, err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 };
