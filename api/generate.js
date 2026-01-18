@@ -1,6 +1,6 @@
 // api/generate.js
 
-// ✅ Load environment variables for local testing
+// ✅ Load environment variables (local testing)
 require('dotenv').config();
 
 const https = require('https');
@@ -10,26 +10,24 @@ const ENDPOINT_PRIMARY = "https://api.sws.speechify.com/v1/audio/stream";
 const ENDPOINT_BACKUP = "https://api.speechify.com/v1/audio/stream";
 const CHUNK_CHAR_LIMIT = 2800;
 const MAX_ATTEMPTS = 3;
-const REQUEST_TIMEOUT = 8000; // 8s Vercel limit
+const REQUEST_TIMEOUT = 15000; // 15s to avoid Vercel timeout
 
-// Load API keys from environment
+// ==== API KEYS ====
+// Tumhare diye hue keys ko yahan add kar rahe hain
 const apiKeys = [
-  process.env.API_KEY_1,
-  process.env.API_KEY_2,
-  process.env.API_KEY_3,
-  process.env.API_KEY_4,
-  process.env.API_KEY_5,
-  process.env.API_KEY_6,
-  process.env.API_KEY_7,
-  process.env.API_KEY_8,
-  process.env.API_KEY_9,
-  process.env.API_KEY_10
-  // Add all your keys here
+  '6rsRRrKu1pPRb7eqMCLaxDiBkWOZBSrYN0NFFd44uZw=',
+  'UbITfHN6iktKmHGloJEOZOv1tiUoLVCylERdCrYXHMw=',
+  '2LidBoMOhqbyZ96fv_3oSnRYZVoJ-wu8SR2lONqq2Os=',
+  'Ye4Zucg6FbyMs_U_qYGa6Uyyko9fVvF3qNt_Ng2Khqo=',
+  'QqXAUXW3Hz0irYR3yMArkklubEQP4x9_K2PLAY_Kjfc=',
+  'Zx6gNWkQ0wec68JRmdiLWkzffViLJNVB_dWrWOkVOYE=',
+  'FwV-A0xbAX51BOLeKSx_jfSZKbsDElRDDQU81_TeRHM=',
+  'LMzfE_zGJwL6oDxgqUYUY27yRT7rx5VmIc47DjcXnFs=',
+  'w8ZCPIBM3GundzJvKPYG2eYMHTw7V01h7tGI6hy08l8='
+  // Tumhare baaki keys bhi yahan add kar sakte ho
 ].filter(Boolean);
 
-if (!apiKeys.length) {
-  console.error('No API keys available! Check your .env or Vercel Environment Variables.');
-}
+if (!apiKeys.length) console.error('No API keys available!');
 
 // Helper: HTTP POST request
 function makeRequest(url, apiKey, payload) {
@@ -91,9 +89,7 @@ module.exports = async (req, res) => {
   try {
     const { text, voice, speed = 1.0 } = req.body;
 
-    if (!text || !voice) {
-      return res.status(400).json({ error: 'Missing text or voice' });
-    }
+    if (!text || !voice) return res.status(400).json({ error: 'Missing text or voice' });
 
     const cleanText = text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
     if (cleanText.length < 2) return res.status(400).json({ error: 'Text too short' });
@@ -112,13 +108,14 @@ module.exports = async (req, res) => {
         const apiKey = apiKeys[keyIndex % apiKeys.length];
         const payload = { voice_id: voice, input: chunk, audio_format: 'mp3', sample_rate: 44100, speed };
 
+        console.log(`Chunk ${i + 1}/${chunks.length} attempt ${attempt + 1}, using API key: ${apiKey.substring(0,5)}...`);
+
         try {
-          // Primary endpoint
           let response = await makeRequest(ENDPOINT_PRIMARY, apiKey, payload);
 
-          // Backup if failed
+          // Backup if primary fails
           if (response.status < 200 || response.status >= 300) {
-            console.warn(`Chunk ${i + 1} primary failed with status ${response.status}, trying backup...`);
+            console.warn(`Primary failed (status ${response.status}) for chunk ${i + 1}, trying backup...`);
             response = await makeRequest(ENDPOINT_BACKUP, apiKey, payload);
           }
 
@@ -126,7 +123,7 @@ module.exports = async (req, res) => {
             const audioData = i > 0 ? stripId3(response.body) : response.body;
             audioBuffers.push(audioData);
             success = true;
-            console.log(`Chunk ${i + 1} generated successfully (attempt ${attempt + 1})`);
+            console.log(`Chunk ${i + 1} generated successfully!`);
             break;
           } else {
             console.warn(`Chunk ${i + 1} failed with status ${response.status}`);
